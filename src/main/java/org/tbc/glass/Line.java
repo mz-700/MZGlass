@@ -14,6 +14,7 @@ public class Line {
 	private final Scope scope;
 	private final List<String> labels;
 	private final String mnemonic;
+	private final int mnemonicColumn;
 	private final Expression arguments;
 	private final String comment;
 	private final SourceFileSpan sourceSpan;
@@ -22,19 +23,20 @@ public class Line {
 	private InstructionObject instructionObject;
 	private Directive directive;
 
-	public Line(Scope scope, List<String> labels, String mnemonic, Expression arguments, String comment, SourceFileSpan sourceSpan) {
+	public Line(Scope scope, List<String> labels, String mnemonic, int mnemonicColumn, Expression arguments, String comment, SourceFileSpan sourceSpan) {
 		if (mnemonic == null)
 			throw new AssemblyException("Missing mnemonic.");
 		this.scope = scope;
 		this.labels = labels;
 		this.mnemonic = mnemonic;
+		this.mnemonicColumn = mnemonicColumn;
 		this.arguments = arguments;
 		this.comment = comment;
 		this.sourceSpan = sourceSpan;
 	}
 
 	public Line copy(Scope scope) {
-		Line newLine = new Line(scope, labels, mnemonic, arguments != null ? arguments.copy(scope) : null, comment, sourceSpan);
+		Line newLine = new Line(scope, labels, mnemonic, mnemonicColumn, arguments != null ? arguments.copy(scope) : null, comment, sourceSpan);
 		newLine.setDirective(directive.copy(scope));
 		return newLine;
 	}
@@ -72,8 +74,15 @@ public class Line {
 	}
 
 	public InstructionFactory getInstruction() {
-		if (instruction == null)
-			instruction = mnemonic != null ? scope.getSymbol(mnemonic).getInstruction() : Empty.INSTANCE;
+		if (instruction == null) {
+			try {
+				instruction = mnemonic != null ? scope.getSymbol(mnemonic).getInstruction() : Empty.INSTANCE;
+			} catch (AssemblyException e) {
+				if (mnemonicColumn != -1)
+					e.addContext(sourceSpan.atColumn(mnemonicColumn));
+				throw e;
+			}
+		}
 		return instruction;
 	}
 

@@ -10,6 +10,7 @@ public class LineBuilder {
 
 	private ArrayList<String> labels;
 	private String mnemonic;
+	private int mnemonicColumn = -1;
 	private Expression arguments;
 	private String comment;
 
@@ -20,9 +21,14 @@ public class LineBuilder {
 	}
 
 	public void setMnemonic(String mnemonic) {
+		setMnemonic(mnemonic, -1);
+	}
+
+	public void setMnemonic(String mnemonic, int column) {
 		if (this.mnemonic != null)
 			throw new AssemblyException("Mnemonic already set.");
 		this.mnemonic = mnemonic;
+		this.mnemonicColumn = column;
 	}
 
 	public void setArguments(Expression arguments) {
@@ -42,11 +48,12 @@ public class LineBuilder {
 	}
 
 	public Line getLine(Scope scope, SourceFileSpan sourceSpan) {
-		Line line = new Line(scope, labels == null ? Collections.emptyList() : labels, mnemonic, arguments, comment, sourceSpan);
+		Line line = new Line(scope, labels == null ? Collections.emptyList() : labels, mnemonic, mnemonicColumn, arguments, comment, sourceSpan);
 
 		labels = null;
 		mnemonic = null;
 		arguments = null;
+		mnemonicColumn = -1;
 		comment = null;
 
 		return line;

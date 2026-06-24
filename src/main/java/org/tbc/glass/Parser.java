@@ -16,6 +16,7 @@ public class Parser {
 	private final SourceFileReader reader;
 	private Scope scope;
 	private Scope lineScope;
+	private int currentColumn;
 	private final LineBuilder lineBuilder = new LineBuilder();
 
 	private State state;
@@ -35,8 +36,7 @@ public class Parser {
 		this.scope = scope;
 		this.lineScope = new Scope(scope);
 
-		SourceFileSpan span = null;
-		int column = 0;
+		SourceFileSpan span = null;
 		try {
 			do {
 				span = reader.getSpan(span);
@@ -49,20 +49,22 @@ public class Parser {
 						lineBuilder.setMnemonic("END");  // otherwise return END the next time
 					break;
 				}
-				column = 0;
+				currentColumn = 0;
 
 				for (int i = 0, length = sourceLine.length(); i < length; i++) {
-					column = i;
+					currentColumn = i;
 					state = state.parse(sourceLine.charAt(i));
 				}
-				column = sourceLine.length();
+				currentColumn = sourceLine.length();
 				state = state.parse('\n');
+				if (state == labelStartState && lineBuilder.isEmpty())
+					span = null;
 			} while (state != labelStartState || lineBuilder.isEmpty());
 
 			if ( !accumulator.isEmpty() )
 				throw new AssemblyException( "Accumulator not consumed. Value: " + accumulator );
 		} catch(AssemblyException e) {
-			e.addContext(span.atColumn(column));
+			e.addContext(span.atColumn(currentColumn));
 			throw e;
 		}
 
@@ -98,6 +100,7 @@ public class Parser {
 					"endp".equals(identifier) || "ENDP".equals(identifier) ||
 					"ends".equals(identifier) || "ENDS".equals(identifier) ||
 					"endstruct".equals(identifier) || "ENDSTRUCT".equals(identifier) ||
+					"endrel".equals(identifier) || "ENDREL".equals(identifier) ||
 					"else".equals(identifier) || "ELSE".equals(identifier) ||
 					"endif".equals(identifier) || "ENDIF".equals(identifier);
 		}
@@ -131,7 +134,7 @@ public class Parser {
 				String identifier = accumulator.toString();
 				accumulator.setLength(0);
 				if (character != ':' && isStandaloneMnemonic(identifier)) {
-					lineBuilder.setMnemonic(identifier);
+					lineBuilder.setMnemonic(identifier, currentColumn - identifier.length());
 					if (isWhitespace(character)) {
 						return argumentStartState;
 					} else if (character == ';') {
@@ -183,7 +186,7 @@ public class Parser {
 				return statementStartState;
 			} else {
 				String mnemonic = accumulator.toString();
-				lineBuilder.setMnemonic(mnemonic);
+				lineBuilder.setMnemonic(mnemonic, currentColumn - mnemonic.length());
 				accumulator.setLength(0);
 				if (isWhitespace(character)) {
 					return isRawArgumentMnemonic(mnemonic) ? rawArgumentStartState : argumentStartState;

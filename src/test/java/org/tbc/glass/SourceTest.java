@@ -25,6 +25,25 @@ public class SourceTest extends TestBase {
 	}
 
 	@Test
+	public void testUnknownMnemonicAfterCommentReportsActualLine() {
+		Scope.SymbolNotFoundException exception = assertThrows(Scope.SymbolNotFoundException.class, () -> assemble(
+			" nop",
+			"; skipped comment",
+			" DEFB 1"
+		));
+		assertEquals("DEFB", exception.getName(), "name");
+		assertAssemblyExceptionSpanEquals(2, 3, 1, exception);
+	}
+
+	@Test
+	public void testUnknownMnemonicAfterLabelReportsMnemonicColumn() {
+		Scope.SymbolNotFoundException exception = assertThrows(Scope.SymbolNotFoundException.class, () -> assemble(
+			"SCROLL_X:       DEFB 0"
+		));
+		assertEquals("DEFB", exception.getName(), "name");
+		assertAssemblyExceptionSpanEquals(0, 1, 16, exception);
+	}
+	@Test
 	public void testJumpSelf() {
 		assertArrayEquals(b(0x00, 0xC3, 0x01, 0x00), assemble(
 			" nop",
