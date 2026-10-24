@@ -1,5 +1,7 @@
 package org.tbc.glass.instructions;
 
+import java.util.function.Consumer;
+
 import org.tbc.glass.Scope;
 import org.tbc.glass.expressions.Expression;
 import org.tbc.glass.expressions.Schema;
@@ -27,10 +29,11 @@ public class Warning extends InstructionFactory {
 
 		@Override
 		public byte[] getBytes() {
-			if (argument == null)
-				System.out.println("Warning: A warning directive was encountered.");
-			else
-				System.out.println("Warning: " + argument.getString());
+			return getBytes(message -> System.out.println("Warning: " + message));
+		}
+
+		public byte[] getBytes(Consumer<String> warnings) {
+			warnings.accept(argument == null ? "A warning directive was encountered." : argument.getString());
 			return super.getBytes();
 		}
 

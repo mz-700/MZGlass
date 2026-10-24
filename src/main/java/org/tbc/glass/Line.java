@@ -1,7 +1,9 @@
 package org.tbc.glass;
 
 import java.util.List;
+import java.util.function.Consumer;
 
+import org.tbc.glass.api.Diagnostic;
 import org.tbc.glass.SourceFile.SourceFileSpan;
 import org.tbc.glass.directives.Directive;
 import org.tbc.glass.expressions.Expression;
@@ -22,6 +24,7 @@ public class Line {
 	private InstructionFactory instruction;
 	private InstructionObject instructionObject;
 	private Directive directive;
+	private Consumer<Diagnostic> diagnosticConsumer;
 
 	public Line(Scope scope, List<String> labels, String mnemonic, int mnemonicColumn, Expression arguments, String comment, SourceFileSpan sourceSpan) {
 		if (mnemonic == null)
@@ -38,6 +41,7 @@ public class Line {
 	public Line copy(Scope scope) {
 		Line newLine = new Line(scope, labels, mnemonic, mnemonicColumn, arguments != null ? arguments.copy(scope) : null, comment, sourceSpan);
 		newLine.setDirective(directive.copy(scope));
+		newLine.setDiagnosticConsumer(diagnosticConsumer);
 		return newLine;
 	}
 
@@ -63,6 +67,10 @@ public class Line {
 
 	public SourceFileSpan getSourceSpan() {
 		return sourceSpan;
+	}
+
+	void setDiagnosticConsumer(Consumer<Diagnostic> consumer) {
+		this.diagnosticConsumer = consumer;
 	}
 
 	public void setDirective(Directive directive) {
@@ -129,6 +137,9 @@ public class Line {
 
 	public byte[] getBytes() {
 		try {
+			if (diagnosticConsumer != null && instructionObject instanceof org.tbc.glass.instructions.Warning.Warning_ warning)
+				return warning.getBytes(message -> diagnosticConsumer.accept(new Diagnostic(
+						Diagnostic.Severity.WARNING, message, sourceSpan.toRange(), List.of())));
 			return instructionObject.getBytes();
 		} catch (AssemblyException e) {
 			e.addContext(sourceSpan);

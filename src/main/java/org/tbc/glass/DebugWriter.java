@@ -22,6 +22,9 @@ import org.tbc.glass.expressions.IfElse;
 import org.tbc.glass.expressions.Index;
 import org.tbc.glass.expressions.Member;
 import org.tbc.glass.expressions.Register;
+import org.tbc.glass.expressions.Sequence;
+import org.tbc.glass.expressions.StringLiteral;
+import org.tbc.glass.expressions.Type;
 import org.tbc.glass.expressions.UnaryOperator;
 import org.tbc.glass.instructions.InstructionObject;
 
@@ -188,16 +191,45 @@ public class DebugWriter {
 
 	private String getMapType(Line line) {
 		String mnemonic = line.getMnemonic();
-		if ("db".equals(mnemonic) || "DB".equals(mnemonic) ||
-				"dw".equals(mnemonic) || "DW".equals(mnemonic) ||
-				"dd".equals(mnemonic) || "DD".equals(mnemonic) ||
-				"mz_asc".equals(mnemonic) || "MZ_ASC".equals(mnemonic) ||
-				"mz_disp".equals(mnemonic) || "MZ_DISP".equals(mnemonic) ||
-				"ds".equals(mnemonic) || "DS".equals(mnemonic))
+		if (isStringData(line))
+			return "string";
+		if (isDataMnemonic(mnemonic) || "ds".equals(mnemonic) || "DS".equals(mnemonic))
 			return "data";
 		if (line.getInstructionObject() != null)
 			return "code";
 		return null;
+	}
+
+	private boolean isStringData(Line line) {
+		String mnemonic = line.getMnemonic();
+		return ("db".equals(mnemonic) || "DB".equals(mnemonic) ||
+				"mz_asc".equals(mnemonic) || "MZ_ASC".equals(mnemonic) ||
+				"mz_disp".equals(mnemonic) || "MZ_DISP".equals(mnemonic)) &&
+				containsString(line.getArguments());
+	}
+
+	private boolean isDataMnemonic(String mnemonic) {
+		return "db".equals(mnemonic) || "DB".equals(mnemonic) ||
+				"dw".equals(mnemonic) || "DW".equals(mnemonic) ||
+				"dd".equals(mnemonic) || "DD".equals(mnemonic) ||
+				"mz_asc".equals(mnemonic) || "MZ_ASC".equals(mnemonic) ||
+				"mz_disp".equals(mnemonic) || "MZ_DISP".equals(mnemonic);
+	}
+
+	private boolean containsString(Expression expression) {
+		if (expression == null)
+			return false;
+		if (expression instanceof StringLiteral)
+			return true;
+		if (expression instanceof Sequence) {
+			Sequence sequence = (Sequence)expression;
+			return containsString(sequence.getHead()) || containsString(sequence.getTail());
+		}
+		try {
+			return expression.is(Type.STRING);
+		} catch (EvaluationException e) {
+			return false;
+		}
 	}
 
 	private List<Range> splitRanges(List<Range> ranges) {
@@ -228,7 +260,8 @@ public class DebugWriter {
 			if (range.start <= start && range.end >= end) {
 				if ("code".equals(range.type))
 					return "code";
-				type = range.type;
+				if (type == null || "string".equals(range.type))
+					type = range.type;
 			}
 		}
 		return type;

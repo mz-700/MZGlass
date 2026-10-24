@@ -7,23 +7,53 @@ import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
+import org.tbc.glass.api.SourceRange;
+
 public class SourceFile {
 
 	private final Path path;
 	private final List<String> content;
+	private final String text;
+	private final int[] lineOffsets;
+	private final int readerLineCount;
 
 	public SourceFile(Path path) {
-		this.path = path;
+		this(path, readText(path));
+	}
+
+	private static String readText(Path path) {
 		try {
-			this.content = Files.readAllLines( path, StandardCharsets.UTF_8 );
+			return Files.readString(path, StandardCharsets.UTF_8);
 		} catch (IOException e) {
-			throw new AssemblyException(e);
+			throw new AssemblyException("Cannot read source file: " + path, e);
 		}
 	}
 
 	public SourceFile(String string) {
-		this.path = null;
-		this.content = Arrays.asList(string.split("\\R", -1));
+		this(null, string);
+	}
+
+	/** Source snapshot retaining its original path, including files not yet on disk. */
+	public SourceFile(Path path, String string) {
+		this.path = path;
+		this.text = string.replace("\r\n", "\n").replace('\r', '\n');
+		this.content = Arrays.asList(text.split("\n", -1));
+		// Named snapshots follow Files.readAllLines' EOF behavior, preserving CLI listings.
+		this.readerLineCount = path == null ? content.size() : text.isEmpty() ? 0
+				: content.size() - (text.endsWith("\n") ? 1 : 0);
+		this.lineOffsets = new int[content.size()];
+		for (int line = 1; line < lineOffsets.length; line++)
+			lineOffsets[line] = lineOffsets[line - 1] + content.get(line - 1).length() + 1;
+	}
+
+	/** Text and offsets use LF line endings and UTF-16 code units. */
+	public String getText() { return text; }
+
+	public int getLineCount() { return content.size(); }
+
+	public int getLineStartOffset(int line) {
+		if (line < 0 || line > content.size()) throw new IndexOutOfBoundsException(line);
+		return line == content.size() ? text.length() : lineOffsets[line];
 	}
 
 	public SourceFileReader getReader() {
@@ -50,14 +80,14 @@ public class SourceFile {
 		}
 
 		public String readLine() {
-			if (lineNumber >= content.size())
+			if (lineNumber >= readerLineCount)
 				return null;
 			return getLine(lineNumber++);
 		}
 
 		public SourceFileSpan getSpan(SourceFileSpan span) {
 			return new SourceFileSpan(span != null ? span.lineStart : lineNumber,
-				lineNumber >= content.size() ? lineNumber : lineNumber + 1);
+				lineNumber >= readerLineCount ? lineNumber : lineNumber + 1);
 		}
 	}
 
@@ -79,6 +109,25 @@ public class SourceFile {
 
 		public SourceFile getSourceFile() {
 			return SourceFile.this;
+		}
+
+		/** Zero-based first line and exclusive last line of the logical statement. */
+		public int getLineStart() { return lineStart; }
+		public int getLineEnd() { return lineEnd; }
+
+		/** Zero-based UTF-16 column on the last line, or -1 for a statement-wide span. */
+		public int getColumn() { return column; }
+
+		public SourceRange toRange() {
+			int first = Math.clamp(lineStart, 0, content.size());
+			if (first == content.size()) return new SourceRange(path, text.length(), text.length());
+			int last = Math.clamp(lineEnd - 1, first, content.size() - 1);
+			if (column >= 0) {
+				int start = lineOffsets[last] + Math.min(column, content.get(last).length());
+				int length = start < text.length() && text.charAt(start) != '\n' ? Character.charCount(text.codePointAt(start)) : 0;
+				return new SourceRange(path, start, start + length);
+			}
+			return new SourceRange(path, lineOffsets[first], lineOffsets[last] + content.get(last).length());
 		}
 
 		public SourceFileSpan atColumn(int column) {

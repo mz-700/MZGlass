@@ -1,11 +1,13 @@
 package org.tbc.glass;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Objects;
+import java.util.function.Consumer;
+
+import org.tbc.glass.api.Diagnostic;
 
 import org.tbc.glass.directives.Directive;
 import org.tbc.glass.directives.Ds;
@@ -41,30 +43,31 @@ public class SourceBuilder {
 	private final List<String> terminators;
 	private final List<Path> includePaths;
 
-	private static final List<SourceFile> sourceFiles = new ArrayList<>();
+	private final SourceSession session;
 
 	public SourceBuilder(List<Path> includePaths) {
-		this(new Scope(new GlobalScope()), includePaths);
+		this(includePaths, SourceProvider.fileSystem());
 	}
 
-	private SourceBuilder(Scope scope, List<Path> includePaths) {
-		this(scope, END_TERMINATORS, includePaths);
+	public SourceBuilder(List<Path> includePaths, SourceProvider sourceProvider) {
+		this(includePaths, sourceProvider, null);
 	}
 
-	private SourceBuilder(Scope scope, List<String> terminators, List<Path> includePaths) {
+	/** A diagnostic consumer captures warnings; null retains the command-line output. */
+	public SourceBuilder(List<Path> includePaths, SourceProvider sourceProvider, Consumer<Diagnostic> diagnostics) {
+		this(new Scope(new GlobalScope()), END_TERMINATORS, List.copyOf(includePaths),
+				new SourceSession(Objects.requireNonNull(sourceProvider, "sourceProvider"), diagnostics));
+	}
+
+	private SourceBuilder(Scope scope, List<String> terminators, List<Path> includePaths, SourceSession session) {
 		this.source = new Source(scope);
 		this.terminators = terminators;
 		this.includePaths = includePaths;
+		this.session = session;
 	}
 
 	public boolean hasLoadedSourceFile(Path path) {
-		try {
-			for (SourceFile sourceFile : sourceFiles)
-				if (Files.isSameFile(path, sourceFile.getPath()))
-					return true;
-		} catch (IOException e) {
-		}
-		return false;
+		return session.hasLoaded(path);
 	}
 
 	private List<Path> getIncludePaths(SourceFile sourceFile) {
@@ -79,7 +82,7 @@ public class SourceBuilder {
 	private Source parseInclude(Expression sourcePath, SourceFile baseSourceFile, boolean once) {
 		for (Path includePath : getIncludePaths(baseSourceFile)) {
 			Path fullPath = includePath.resolve(sourcePath.getString());
-			if (Files.exists(fullPath)) {
+			if (session.exists(fullPath)) {
 				if (once && hasLoadedSourceFile(fullPath))
 					return null;
 				return parse(fullPath);
@@ -89,9 +92,7 @@ public class SourceBuilder {
 	}
 
 	public Source parse(Path sourcePath) {
-		SourceFile sourceFile = new SourceFile(sourcePath);
-		sourceFiles.add(sourceFile);
-		return parse(sourceFile);
+		return parse(session.readSource(sourcePath));
 	}
 
 	public Source parse(SourceFile sourceFile) {
@@ -99,8 +100,18 @@ public class SourceBuilder {
 	}
 
 	public Source parse(Parser parser) {
+		session.enter(parser.getSourceFile());
+		try {
+			return parseBody(parser);
+		} finally {
+			session.leave(parser.getSourceFile());
+		}
+	}
+
+	private Source parseBody(Parser parser) {
 		while (true) {
 			Line line = parser.parse(source.getScope());
+			line.setDiagnosticConsumer(session.diagnostics);
 
 			try {
 				Directive directive = getDirective(line, parser);
@@ -125,7 +136,7 @@ public class SourceBuilder {
 			return getIncludeDirective(line, parser.getSourceFile());
 		case "incbin":
 		case "INCBIN":
-			return new Incbin(getIncludePaths(parser.getSourceFile()));
+			return new Incbin(getIncludePaths(parser.getSourceFile()), session);
 		case "macro":
 		case "MACRO":
 			return new Macro(parseBlock(line.getScope(), ENDM_TERMINATORS, parser));
@@ -199,13 +210,13 @@ public class SourceBuilder {
 			throw new AssemblyException("Include only accepts 1 argument.");
 		if (!argument.is(Type.STRING))
 			throw new AssemblyException("A string literal is expected.");
-		SourceBuilder sourceBuilder = new SourceBuilder(source.getScope(), includePaths);
+		SourceBuilder sourceBuilder = new SourceBuilder(source.getScope(), END_TERMINATORS, includePaths, session);
 		sourceBuilder.parseInclude(argument, sourceFile, once);
 		return new Include(sourceBuilder.source);
 	}
 
 	private Source parseBlock(Scope scope, List<String> terminators, Parser parser) {
-		return new SourceBuilder(scope, terminators, includePaths).parse(parser);
+		return new SourceBuilder(scope, terminators, includePaths, session).parseBody(parser);
 	}
 
 }

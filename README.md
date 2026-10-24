@@ -47,6 +47,200 @@ Options:
 Note that [Java 25](http://java.com/getjava) must be installed to run Glass.
 To check your Java version, invoke the `java -version` command.
 
+Java library API
+----------------
+
+MZGlass can also be used in-process through `org.tbc.glass.api`. The Maven
+coordinates for the development version are `org.tbc:MZGlass:1.2-SNAPSHOT`;
+install it locally with `mvn install`. The Java module name is `org.tbc.glass`.
+The executable JAR and the existing command-line options remain available.
+
+```java
+import java.nio.file.Path;
+import java.util.List;
+import java.util.Map;
+import org.tbc.glass.api.AssemblyRequest;
+import org.tbc.glass.api.AssemblyResult;
+import org.tbc.glass.api.AssemblyService;
+
+Path main = Path.of("project/main.asm").toAbsolutePath().normalize();
+AssemblyRequest request = new AssemblyRequest(main, List.of(), Map.of(
+    main, " org $1200\nMain: ld a,42\n ret\n"
+));
+AssemblyResult result = new AssemblyService().assemble(request);
+if (result.succeeded()) {
+    byte[] objectCode = result.objectCode();
+} else {
+    result.diagnostics().forEach(diagnostic -> {
+        System.err.println(diagnostic.message() + " at " + diagnostic.range());
+    });
+}
+```
+
+`AssemblyRequest` captures an entry source path, include search paths and a map
+of unsaved source text keyed by its original path. Relative paths are relative
+to the process working directory. A source override can name a file or directory
+that does not exist on disk. Included source files use the same overrides; other
+inputs fall back to the filesystem. Include lookup searches the including
+source's directory first, followed by the configured include paths in order.
+`INCBIN` uses raw binary inputs from the fallback provider, not source-text
+overrides. A custom `SourceProvider` can supply source and binary inputs from
+another store.
+
+Each service call creates a fresh assembly session. Include-once state is shared
+by nested includes within that session and is discarded between calls. Ordinary
+recursive include cycles produce an assembly error. Source and binary reads are
+cached on first access within a session; callers needing an atomic snapshot of
+all disk inputs should supply a snapshot provider. Separate calls may run
+concurrently; a custom provider shared between calls must support that use.
+
+The result contains raw object bytes and immutable diagnostics, with defensive
+copies of byte arrays. Warnings are returned as diagnostics rather than printed
+by the library API. Failed assembly returns no partial bytes. The analysis is
+strict and returns its first error; recovery for unfinished editor statements
+and collecting multiple independent errors are future work. This API does not
+expose symbol/reference indexes. To build MZF bytes in memory, use
+`assemble(request, SourceProvider.fileSystem(), Assembler.OutputType.MZF)`.
+The default remains BIN. Both paths share the command-line object encoder; MZF
+metadata and size errors become structured diagnostics. The service writes no
+files. The command-line assembler also retains symbol, listing and debug output.
+
+Diagnostic ranges use zero-based UTF-16 offsets in LF-normalized source text,
+with exclusive ends. The primary range is the innermost error context; additional
+include/macro contexts are in `related()`. Parser columns identify a character
+(or a zero-width end-of-line range). Errors without a specific column identify
+the logical statement. Input failures without source context use range `0..0`
+at the entry file. Source spans expose their line/column values and `toRange()`
+for callers using the lower-level assembler classes directly.
+
+Use `mvn verify` to run the assembler and API regression tests. A modular consumer
+declares `requires org.tbc.glass;`; the modular JAR can be included in a `jlink`
+runtime image.
+
+Symbol file format
+------------------
+
+The optional symbol file is a text file containing one resolved integer symbol
+per line:
+
+    symbol: equ value
+
+Symbols are sorted alphabetically. Nested and local scopes are represented with
+dot-separated names. Values are written as hexadecimal numbers with an `H`
+suffix; hexadecimal values beginning with `A` through `F` receive a leading
+zero so that the output is valid assembler syntax. Negative values have a
+leading minus sign.
+
+For example:
+
+    Main.loop: equ 120AH
+    PLAYER.health: equ 2H
+    SCREEN: equ 0D000H
+    adjustment: equ -10H
+
+Only symbols that resolve to integer values are included. The file can be
+included in another assembly source file because every entry uses the standard
+`equ` syntax.
+
+List file format
+----------------
+
+The list file is a tab-separated text listing of the assembled source. A source
+header is emitted whenever the listing switches to another file:
+
+    # source: path/to/source.asm
+
+Each following line contains the source line number, assembly address, emitted
+object bytes, and source text:
+
+    line	address	byte1	byte2	byte3	byte4	source
+
+For example:
+
+       1	1200	00					start: nop
+       2	1201	C3	00	12			jp start
+
+Line numbers and addresses are displayed in decimal and hexadecimal,
+respectively. Object bytes are uppercase hexadecimal and occupy tab-separated
+columns. Four byte columns are padded when fewer than four bytes are emitted;
+instructions or data that emit more than four bytes continue into additional
+columns. Lines that emit no object code have an empty object field.
+
+Macro invocations contain `MACRO` in the object column, followed by the
+expanded lines. Expanded macro lines show their substituted arguments. Included
+files receive their own `# source:` header, and section contents are listed at
+the point where they are assembled.
+
+Debug file format
+-----------------
+
+The debug file selected with `-D` is a plain-text, decimal-address format used
+by the MZ700 Debugger. It consists of four sections:
+
+    ; LABELS
+
+    ; MAP
+
+    ; USAGES
+
+    ; MACROS
+
+Blank lines separate the headers from their entries.
+
+The `LABELS` section maps symbols to their source locations, kinds, and values:
+
+    name: absolute-path,line,type,value
+
+`line` is one-based. `type` is `LABEL` for code or general labels, `DS` for
+reserved storage, `DC` for data created by `db`, `dw`, `dd`, `mz_asc`, or
+`mz_disp`, and `EQU` for constants. The final field is the decimal address for
+`LABEL`, `DS`, and `DC`, and the decimal value for a resolved `EQU`. If an
+`EQU` cannot be reduced to an integer, its expression is written instead.
+Local symbols use dot-qualified names such as `Main.loop`.
+
+The `MAP` section describes assembled address ranges:
+
+    start:end:type
+
+`start` is inclusive, `end` is exclusive, and `type` is `code`, `data`, or
+`string`. `string` is used for `db`, `mz_asc`, and `mz_disp` lines whose
+arguments contain a string value, such as `db "bar"`. Numeric-only uses of
+those mnemonics are still `data`. Adjacent ranges of the same type are combined.
+If ranges overlap, `code` takes precedence over `string`, and `string` takes
+precedence over `data`.
+
+The `USAGES` section lists the assembled addresses that reference each label:
+
+    name:address,address,...
+
+Each address appears at most once per label and is the address of the
+instruction or data line containing the reference. References in `equ`
+definitions are not included.
+
+The `MACROS` section maps macro definitions to their source locations:
+
+    name: absolute-path,line
+
+For example, a debug file may contain:
+
+    ; LABELS
+
+    start: C:\project\main.asm,1,LABEL,4608
+    message: C:\project\main.asm,4,DC,4612
+
+    ; MAP
+
+    4608:4612:code
+    4612:4624:data
+
+    ; USAGES
+
+    start:4609
+
+    ; MACROS
+
+    PRINT: C:\project\macros.asm,12
+
 Syntax
 ------
 
@@ -588,9 +782,9 @@ Character and string literals support the following escape sequences:
 Numeric escape sequences are not supported. In stead, you can insert them using
 the comma operator: `"abc", 0FFH, "def"`.
 
-The character set used to read files is ISO-8859-1, this maps the file’s bytes
-1:1 to the Unicode code points used internally so the object code output matches
-the input file bytes verbatim.
+Source files are read as UTF-8. Source encoding is independent of emitted object
+bytes: `db`, `mz_asc`, `mz_disp` and other data instructions retain their existing
+byte-generation rules.
 
 The assembler uses 32-bit integer math internally. When a 8-bit or 16-bit value
 is generated, the excessive bits are usually truncated. Except for addresses,

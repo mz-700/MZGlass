@@ -51,6 +51,42 @@ public class DebugWriterTest extends TestBase {
 	}
 
 	@Test
+	public void testStringMapSegments() throws IOException {
+		Path sourcePath = temporaryDirectory.resolve("debugStrings.asm");
+		Files.write(sourcePath, Arrays.asList(
+			"numeric: db 1",
+			"ascii: db \"bar\"",
+			"terminator: db 0",
+			"mzAscii: mz_asc \"baz\"",
+			"mzDisplay: mz_disp \"ABC\"",
+			"word: dw 1234H"
+		));
+
+		assertIterableEquals(
+			debugLines(
+			s(
+				label("numeric", sourcePath, 1, "DC", "0"),
+				label("ascii", sourcePath, 2, "DC", "1"),
+				label("terminator", sourcePath, 3, "DC", "4"),
+				label("mzAscii", sourcePath, 4, "DC", "5"),
+				label("mzDisplay", sourcePath, 5, "DC", "8"),
+				label("word", sourcePath, 6, "DC", "11")
+			),
+			s(
+				map(0, 1, "data"),
+				map(1, 4, "string"),
+				map(4, 5, "data"),
+				map(5, 11, "string"),
+				map(11, 13, "data")
+			),
+			s(),
+			s()
+			),
+			debug(sourcePath)
+		);
+	}
+
+	@Test
 	public void testIncludedLabels() throws IOException {
 		Path sourcePath = temporaryDirectory.resolve("debugInclude.asm");
 		Path includePath = temporaryDirectory.resolve("debugIncluded.asm");

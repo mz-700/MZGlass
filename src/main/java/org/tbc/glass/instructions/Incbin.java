@@ -1,13 +1,12 @@
 package org.tbc.glass.instructions;
 
-import java.io.IOException;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.List;
 
 import org.tbc.glass.AssemblyException;
 import org.tbc.glass.Scope;
+import org.tbc.glass.SourceProvider;
 import org.tbc.glass.expressions.Expression;
 import org.tbc.glass.expressions.IntegerLiteral;
 import org.tbc.glass.expressions.Schema;
@@ -15,22 +14,28 @@ import org.tbc.glass.expressions.Schema;
 public class Incbin extends InstructionFactory {
 
 	private final List<Path> basePaths;
+	private final SourceProvider sourceProvider;
 
 	public Incbin(List<Path> basePaths) {
+		this(basePaths, SourceProvider.fileSystem());
+	}
+
+	public Incbin(List<Path> basePaths, SourceProvider sourceProvider) {
 		this.basePaths = basePaths;
+		this.sourceProvider = sourceProvider;
 	}
 
 	@Override
 	public InstructionObject createObject(Scope context, Expression arguments) {
 		if (Incbin_.ARGUMENTS_S.check(arguments))
 			return new Incbin_(context, arguments.getElement(0),
-					IntegerLiteral.ZERO, null, basePaths);
+					IntegerLiteral.ZERO, null, basePaths, sourceProvider);
 		if (Incbin_.ARGUMENTS_S_N.check(arguments))
 			return new Incbin_(context, arguments.getElement(0),
-					arguments.getElement(1), null, basePaths);
+					arguments.getElement(1), null, basePaths, sourceProvider);
 		if (Incbin_.ARGUMENTS_S_N_N.check(arguments))
 			return new Incbin_(context, arguments.getElement(0),
-					arguments.getElement(1), arguments.getElement(2), basePaths);
+					arguments.getElement(1), arguments.getElement(2), basePaths, sourceProvider);
 		throw new ArgumentException();
 	}
 
@@ -44,14 +49,20 @@ public class Incbin extends InstructionFactory {
 		private final Expression start;
 		private final Expression length;
 		private final List<Path> basePaths;
+		private final SourceProvider sourceProvider;
 		private byte[] bytes;
 
 		public Incbin_(Scope context, Expression path, Expression start, Expression length, List<Path> basePaths) {
+			this(context, path, start, length, basePaths, SourceProvider.fileSystem());
+		}
+
+		public Incbin_(Scope context, Expression path, Expression start, Expression length, List<Path> basePaths, SourceProvider sourceProvider) {
 			super(context);
 			this.path = path;
 			this.start = start;
 			this.length = length;
 			this.basePaths = basePaths;
+			this.sourceProvider = sourceProvider;
 		}
 
 		@Override
@@ -80,13 +91,7 @@ public class Incbin extends InstructionFactory {
 		{
 			for (Path basePath : basePaths) {
 				Path fullPath = basePath.resolve(path.getString());
-				if (Files.exists(fullPath)) {
-					try {
-						return Files.readAllBytes(fullPath);
-					} catch (IOException e) {
-						throw new AssemblyException(e);
-					}
-				}
+				if (sourceProvider.exists(fullPath)) return sourceProvider.readBinary(fullPath);
 			}
 			throw new AssemblyException("Incbin file not found: " + path.getString());
 		}

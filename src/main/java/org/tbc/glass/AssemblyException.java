@@ -21,7 +21,7 @@ public class AssemblyException extends RuntimeException {
 	}
 
 	public AssemblyException(Throwable cause) {
-		this("Error during assembly.", null);
+		this("Error during assembly.", cause);
 	}
 
 	public AssemblyException(String message, Throwable cause) {

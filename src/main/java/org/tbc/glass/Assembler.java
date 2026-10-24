@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 
 import org.tbc.glass.SourceFile.SourceFileSpan;
 
@@ -107,9 +108,7 @@ public class Assembler {
 
 	public void writeObject(Path objectPath, OutputType outputType) {
 		try (OutputStream output = objectPath != null ? createBufferedOutputStream(objectPath) : new NullOutputStream()) {
-			byte[] object = assemble();
-			if (outputType == OutputType.MZF)
-				object = createMzfObject(object);
+			byte[] object = encodeObject(source, assemble(), outputType);
 			output.write(object, 0, object.length);
 		} catch (IOException e) {
 			throw new RuntimeException(e);
@@ -123,7 +122,14 @@ public class Assembler {
 		}
 	}
 
-	private byte[] createMzfObject(byte[] object) {
+	/** Shared object encoding for command-line and in-process builds. Does not write files. */
+	public static byte[] encodeObject(Source source, byte[] object, OutputType outputType) {
+		Objects.requireNonNull(source, "source");
+		Objects.requireNonNull(outputType, "outputType");
+		return outputType == OutputType.MZF ? createMzfObject(source, object) : object.clone();
+	}
+
+	private static byte[] createMzfObject(Source source, byte[] object) {
 		Source.MzfConfig mzfConfig = source.getMzfConfig();
 		if (!mzfConfig.hasLoadAddress())
 			throw new AssemblyException("MZF_LOAD is required for MZF output.");
@@ -144,7 +150,7 @@ public class Assembler {
 		return mzfObject;
 	}
 
-	private void writeTextField(byte[] output, int offset, int length, String text, boolean terminate) {
+	private static void writeTextField(byte[] output, int offset, int length, String text, boolean terminate) {
 		int maxTextLength = terminate ? length - 1 : length;
 		int copyLength = Math.min(text.length(), maxTextLength);
 		for (int i = 0; i < copyLength; i++)
@@ -153,12 +159,12 @@ public class Assembler {
 			output[offset + copyLength] = 0x0D;
 	}
 
-	private void writeWord(byte[] output, int offset, int value) {
+	private static void writeWord(byte[] output, int offset, int value) {
 		output[offset] = (byte)value;
 		output[offset + 1] = (byte)(value >> 8);
 	}
 
-	private void checkWord(String field, int value) {
+	private static void checkWord(String field, int value) {
 		if (value < 0 || value > 0xFFFF)
 			throw new AssemblyException(field + " out of range: " + value);
 	}
