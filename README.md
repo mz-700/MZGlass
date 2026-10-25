@@ -498,6 +498,11 @@ routine assumes the actual code bytes have already been copied there.
 Specifies metadata for `-O MZF` output.\
 `mzf_load` is required. `mzf_start` defaults to the load address, `mzf_title` defaults to `TITLE`, and
 `mzf_comments` defaults to an empty field. If these directives appear multiple times, the last value is used.
+
+The two-byte little-endian size at header offset `$12` is the binary payload size,
+excluding the 128-byte header. Payloads can contain up to 65,535 bytes; the complete
+file is 128 bytes longer. Loading still requires the payload to fit the target's
+address space at the selected load address.
     
         mzf_title the game!
         mzf_load $1200

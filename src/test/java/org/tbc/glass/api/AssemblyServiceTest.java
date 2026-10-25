@@ -256,7 +256,7 @@ class AssemblyServiceTest {
         }
         var mzf = service.assemble(request(source), SourceProvider.fileSystem(), org.tbc.glass.Assembler.OutputType.MZF).objectCode();
         assertEquals(130, mzf.length);
-        assertEquals(130, (mzf[18] & 255) | (mzf[19] & 255) << 8);
+        assertEquals(2, (mzf[18] & 255) | (mzf[19] & 255) << 8);
         assertEquals(0x1200, (mzf[20] & 255) | (mzf[21] & 255) << 8);
         assertEquals(0x1234, (mzf[22] & 255) | (mzf[23] & 255) << 8);
     }
@@ -274,12 +274,23 @@ class AssemblyServiceTest {
     }
 
     @Test void mzfMetadataAndSizeErrorsReturnDiagnosticsWithoutPartialBytes() {
-        for (String source : List.of(" nop\n", " mzf_load $1200\n ds 65408\n")) {
+        for (String source : List.of(" nop\n", " mzf_load $1200\n ds 65536\n")) {
             var result = service.assemble(request(source), SourceProvider.fileSystem(), org.tbc.glass.Assembler.OutputType.MZF);
             assertFalse(result.succeeded()); assertEquals(0, result.objectCode().length);
             assertTrue(result.diagnostics().getFirst().message().startsWith("MZF"));
             assertEquals(directory.resolve("main.asm"), result.diagnostics().getFirst().range().path());
         }
         assertTrue(service.assemble(request(" nop\n")).succeeded(), "Default BIN output must not require MZF metadata");
+    }
+
+    @Test void mzfSizeFieldCountsOnlyPayloadIncludingTheFullUnsignedWordRange() {
+        for (int length : List.of(0, 1, 256, 65408, 65535)) {
+            var result = service.assemble(request(" mzf_load 0\n ds " + length + "\n"),
+                    SourceProvider.fileSystem(), org.tbc.glass.Assembler.OutputType.MZF);
+            assertTrue(result.succeeded(), result.diagnostics().toString());
+            byte[] image = result.objectCode();
+            assertEquals(128 + length, image.length);
+            assertEquals(length, (image[18] & 255) | (image[19] & 255) << 8);
+        }
     }
 }

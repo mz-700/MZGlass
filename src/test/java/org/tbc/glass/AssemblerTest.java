@@ -33,7 +33,7 @@ public class AssemblerTest extends TestBase {
 		assertEquals(130, output.length);
 		assertEquals(1, output[0] & 0xFF);
 		assertFieldEquals(new int[] { 0x96, 0x98, 0x92, ' ', 0x97, 0xA1, 0xB3, 0x92, '!', 0x0D }, output, 1, 17);
-		assertWordEquals(130, output, 18);
+		assertWordEquals(2, output, 18);
 		assertWordEquals(0x1200, output, 20);
 		assertWordEquals(0x1234, output, 22);
 		assertFieldEquals(new int[] { 0x9F, 0xB7, 0xB3, 0xB3, 0x92, 0xB0, 0x96, 0xA4 }, output, 24, 104);
@@ -55,6 +55,7 @@ public class AssemblerTest extends TestBase {
 
 		byte[] output = Files.readAllBytes(objectPath);
 		assertFieldEquals("TITLE\r", output, 1, 17);
+		assertWordEquals(1, output, 18);
 		assertWordEquals(0x1200, output, 20);
 		assertWordEquals(0x1200, output, 22);
 	}

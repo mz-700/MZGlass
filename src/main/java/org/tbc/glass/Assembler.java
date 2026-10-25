@@ -134,15 +134,15 @@ public class Assembler {
 		if (!mzfConfig.hasLoadAddress())
 			throw new AssemblyException("MZF_LOAD is required for MZF output.");
 
-		int size = MZF_HEADER_SIZE + object.length;
-		checkWord("MZF size", size);
+		int payloadSize = object.length;
+		checkWord("MZF size", payloadSize);
 		checkWord("MZF_LOAD", mzfConfig.getLoadAddress());
 		checkWord("MZF_START", mzfConfig.getStartAddress());
 
-		byte[] mzfObject = new byte[size];
+		byte[] mzfObject = new byte[MZF_HEADER_SIZE + payloadSize];
 		mzfObject[0] = 1;
 		writeTextField(mzfObject, 1, 17, mzfConfig.getTitle(), true);
-		writeWord(mzfObject, 18, size);
+		writeWord(mzfObject, 18, payloadSize);
 		writeWord(mzfObject, 20, mzfConfig.getLoadAddress());
 		writeWord(mzfObject, 22, mzfConfig.getStartAddress());
 		writeTextField(mzfObject, 24, 104, mzfConfig.getComments(), false);
