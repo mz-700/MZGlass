@@ -24,6 +24,10 @@ public class Org extends InstructionFactory {
 			this.argument = argument;
 		}
 
+		public Expression getOrigin() {
+			return argument;
+		}
+
 		@Override
 		public Expression resolve(Expression address) {
 			super.resolve(address);

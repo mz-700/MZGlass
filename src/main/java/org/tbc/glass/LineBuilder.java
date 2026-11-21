@@ -13,6 +13,8 @@ public class LineBuilder {
 	private int mnemonicColumn = -1;
 	private Expression arguments;
 	private String comment;
+	private boolean ignoredInstruction;
+	void ignoreInstruction() { ignoredInstruction=true; }
 
 	public void setLabel(String label) {
 		if (labels == null)
@@ -49,12 +51,14 @@ public class LineBuilder {
 
 	public Line getLine(Scope scope, SourceFileSpan sourceSpan) {
 		Line line = new Line(scope, labels == null ? Collections.emptyList() : labels, mnemonic, mnemonicColumn, arguments, comment, sourceSpan);
+		if(ignoredInstruction) line.ignoreInstruction();
 
 		labels = null;
 		mnemonic = null;
 		arguments = null;
 		mnemonicColumn = -1;
 		comment = null;
+		ignoredInstruction = false;
 
 		return line;
 	}

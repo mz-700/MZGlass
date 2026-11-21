@@ -1,5 +1,7 @@
 package org.tbc.glass;
 
+import java.util.function.Consumer;
+
 import org.tbc.glass.SourceFile.SourceFileReader;
 import org.tbc.glass.SourceFile.SourceFileSpan;
 import org.tbc.glass.expressions.CharacterLiteral;
@@ -14,16 +16,23 @@ import java.io.Serial;
 public class Parser {
 
 	private final SourceFileReader reader;
+	private boolean ignoreMzfDirectives;
 	private Scope scope;
 	private Scope lineScope;
 	private int currentColumn;
-	private final LineBuilder lineBuilder = new LineBuilder();
+	private LineBuilder lineBuilder = new LineBuilder();
 
 	private State state;
 	private final StringBuilder accumulator = new StringBuilder();
-	private final ExpressionBuilder expressionBuilder = new ExpressionBuilder();
+	private ExpressionBuilder expressionBuilder = new ExpressionBuilder();
 
 	public Parser(SourceFile sourceFile) {
+		this(sourceFile, false);
+	}
+
+	/** IDE policy only: discard directive arguments before trying to parse them. */
+	public Parser(SourceFile sourceFile, boolean ignoreMzfDirectives) {
+		this.ignoreMzfDirectives = ignoreMzfDirectives;
 		reader = sourceFile.getReader();
 		state = labelStartState;
 	}
@@ -31,6 +40,8 @@ public class Parser {
 	public SourceFile getSourceFile() {
 		return reader.getSourceFile();
 	}
+
+	void ignoreMzfDirectives(boolean ignore) { this.ignoreMzfDirectives = ignore; }
 
 	public Line parse(Scope scope) {
 		this.scope = scope;
@@ -69,6 +80,21 @@ public class Parser {
 		}
 
 		return lineBuilder.getLine(lineScope, span);
+	}
+
+	/** The reader has consumed the physical line that failed. Start fresh on the next one. */
+	Line parseRecovering(Scope scope, Consumer<AssemblyException> report) {
+		while (true) {
+			try {
+				return parse(scope);
+			} catch (AssemblyException error) {
+				report.accept(error);
+				state = labelStartState;
+				lineBuilder = new LineBuilder();
+				expressionBuilder = new ExpressionBuilder();
+				accumulator.setLength(0);
+			}
+		}
 	}
 
 	void skipToArgumentStartState(String mnemonic)
@@ -186,6 +212,12 @@ public class Parser {
 				return statementStartState;
 			} else {
 				String mnemonic = accumulator.toString();
+				if (ignoreMzfDirectives && mnemonic.regionMatches(true, 0, "mzf_", 0, 4)) {
+					lineBuilder.setMnemonic(mnemonic, currentColumn - mnemonic.length());
+					lineBuilder.ignoreInstruction();
+					accumulator.setLength(0);
+					return commentReadState.parse(character);
+				}
 				lineBuilder.setMnemonic(mnemonic, currentColumn - mnemonic.length());
 				accumulator.setLength(0);
 				if (isWhitespace(character)) {

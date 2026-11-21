@@ -23,6 +23,9 @@ public class Line {
 
 	private InstructionFactory instruction;
 	private InstructionObject instructionObject;
+	private boolean ignoredInstruction;
+	public boolean isIgnoredInstruction() { return ignoredInstruction; }
+	void ignoreInstruction() { ignoredInstruction=true; instruction=Empty.INSTANCE; }
 	private Directive directive;
 	private Consumer<Diagnostic> diagnosticConsumer;
 
@@ -42,6 +45,7 @@ public class Line {
 		Line newLine = new Line(scope, labels, mnemonic, mnemonicColumn, arguments != null ? arguments.copy(scope) : null, comment, sourceSpan);
 		newLine.setDirective(directive.copy(scope));
 		newLine.setDiagnosticConsumer(diagnosticConsumer);
+		if(ignoredInstruction) newLine.ignoreInstruction();
 		return newLine;
 	}
 
@@ -136,11 +140,15 @@ public class Line {
 	}
 
 	public byte[] getBytes() {
+		return getBytes(0);
+	}
+
+	public byte[] getBytes(int originFill) {
 		try {
 			if (diagnosticConsumer != null && instructionObject instanceof org.tbc.glass.instructions.Warning.Warning_ warning)
 				return warning.getBytes(message -> diagnosticConsumer.accept(new Diagnostic(
 						Diagnostic.Severity.WARNING, message, sourceSpan.toRange(), List.of())));
-			return instructionObject.getBytes();
+			return instructionObject.getBytes(originFill);
 		} catch (AssemblyException e) {
 			e.addContext(sourceSpan);
 			throw e;

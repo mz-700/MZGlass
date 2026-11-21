@@ -7,6 +7,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.function.Consumer;
 
+import org.tbc.glass.SourceFile.SourceFileSpan;
 import org.tbc.glass.api.Diagnostic;
 
 import org.tbc.glass.directives.Directive;
@@ -27,6 +28,7 @@ import org.tbc.glass.directives.Terminator;
 import org.tbc.glass.expressions.Expression;
 import org.tbc.glass.expressions.Sequence;
 import org.tbc.glass.expressions.Type;
+import org.tbc.glass.instructions.ArgumentException;
 
 public class SourceBuilder {
 
@@ -44,6 +46,23 @@ public class SourceBuilder {
 	private final List<Path> includePaths;
 
 	private final SourceSession session;
+	private final Recovery recovery;
+
+	private record OperandCheck(Line line, Consumer<AssemblyException> report) {}
+
+	private record Recovery(Consumer<AssemblyException> report, List<OperandCheck> operands) {
+		Recovery includedAt(SourceFileSpan site) {
+			return new Recovery(error -> {
+				error.addContext(site);
+				report.accept(error);
+			}, operands);
+		}
+
+		Recovery inBlock() {
+			// The block may be inactive or require macro arguments to be checked.
+			return new Recovery(report, null);
+		}
+	}
 
 	public SourceBuilder(List<Path> includePaths) {
 		this(includePaths, SourceProvider.fileSystem());
@@ -55,15 +74,32 @@ public class SourceBuilder {
 
 	/** A diagnostic consumer captures warnings; null retains the command-line output. */
 	public SourceBuilder(List<Path> includePaths, SourceProvider sourceProvider, Consumer<Diagnostic> diagnostics) {
-		this(new Scope(new GlobalScope()), END_TERMINATORS, List.copyOf(includePaths),
-				new SourceSession(Objects.requireNonNull(sourceProvider, "sourceProvider"), diagnostics));
+		this(includePaths,sourceProvider,diagnostics,false);
 	}
 
-	private SourceBuilder(Scope scope, List<String> terminators, List<Path> includePaths, SourceSession session) {
+	/** Opt-in IDE policy; default constructors preserve standalone parsing. */
+	public SourceBuilder(List<Path> includePaths, SourceProvider sourceProvider, Consumer<Diagnostic> diagnostics, boolean ignoreMzfDirectives) {
+		this(includePaths, sourceProvider, diagnostics, ignoreMzfDirectives, null);
+	}
+
+	public static SourceBuilder forDiagnostics(List<Path> includePaths, SourceProvider sourceProvider,
+			Consumer<Diagnostic> diagnostics, boolean ignoreMzfDirectives, Consumer<AssemblyException> parseErrors) {
+		return new SourceBuilder(includePaths, sourceProvider, diagnostics, ignoreMzfDirectives,
+				new Recovery(Objects.requireNonNull(parseErrors), new ArrayList<>()));
+	}
+
+	private SourceBuilder(List<Path> includePaths, SourceProvider sourceProvider, Consumer<Diagnostic> diagnostics,
+			boolean ignoreMzfDirectives, Recovery recovery) {
+		this(new Scope(new GlobalScope()), END_TERMINATORS, List.copyOf(includePaths),
+				new SourceSession(Objects.requireNonNull(sourceProvider, "sourceProvider"), diagnostics,ignoreMzfDirectives), recovery);
+	}
+
+	private SourceBuilder(Scope scope, List<String> terminators, List<Path> includePaths, SourceSession session, Recovery recovery) {
 		this.source = new Source(scope);
 		this.terminators = terminators;
 		this.includePaths = includePaths;
 		this.session = session;
+		this.recovery = recovery;
 	}
 
 	public boolean hasLoadedSourceFile(Path path) {
@@ -88,7 +124,11 @@ public class SourceBuilder {
 				return parse(fullPath);
 			}
 		}
-		throw new AssemblyException("Include file not found: " + sourcePath.getString());
+		var missing = new AssemblyException("Include file not found: " + sourcePath.getString());
+		if (recovery == null)
+			throw missing;
+		recovery.report().accept(missing);
+		return null;
 	}
 
 	public Source parse(Path sourcePath) {
@@ -109,19 +149,48 @@ public class SourceBuilder {
 	}
 
 	private Source parseBody(Parser parser) {
+		parser.ignoreMzfDirectives(session.ignoreMzfDirectives);
 		while (true) {
-			Line line = parser.parse(source.getScope());
+			Line line = recovery == null ? parser.parse(source.getScope()) : parser.parseRecovering(source.getScope(), recovery.report());
 			line.setDiagnosticConsumer(session.diagnostics);
 
 			try {
 				Directive directive = getDirective(line, parser);
 				line.setDirective(directive);
 				source.addLine(line);
+				if (recovery != null && recovery.operands() != null && directive instanceof Instruction && !line.isIgnoredInstruction())
+					recovery.operands().add(new OperandCheck(line, recovery.report()));
 				if (directive instanceof Terminator)
 					return source;
 			} catch (AssemblyException e) {
 				e.addContext(line.getSourceSpan());
 				throw e;
+			}
+		}
+	}
+
+	/** Check independent built-in operand forms on a recovered tree, without resolving addresses or emitting bytes. */
+	public void validateRecoveredOperands() {
+		if (recovery == null)
+			throw new IllegalStateException("Operand recovery requires a diagnostics source builder.");
+		try {
+			source.register();
+		} catch (AssemblyException incompleteSymbols) {
+			return;
+		}
+		Scope builtins = source.getScope().getParent();
+		for (OperandCheck check : recovery.operands()) {
+			Line line = check.line();
+			String mnemonic = line.getMnemonic();
+			try {
+				if (!builtins.hasLocalSymbol(mnemonic) || line.getScope().getSymbol(mnemonic) != builtins.getLocalSymbol(mnemonic))
+					continue;
+				line.getInstruction().createObject(line.getScope(), line.getArguments());
+			} catch (ArgumentException error) {
+				error.addContext(line.getSourceSpan());
+				check.report().accept(error);
+			} catch (AssemblyException dependentError) {
+				// Evaluation may depend on a skipped statement or an address that has yet to be assigned.
 			}
 		}
 	}
@@ -210,13 +279,14 @@ public class SourceBuilder {
 			throw new AssemblyException("Include only accepts 1 argument.");
 		if (!argument.is(Type.STRING))
 			throw new AssemblyException("A string literal is expected.");
-		SourceBuilder sourceBuilder = new SourceBuilder(source.getScope(), END_TERMINATORS, includePaths, session);
+		Recovery included = recovery == null ? null : recovery.includedAt(line.getSourceSpan());
+		SourceBuilder sourceBuilder = new SourceBuilder(source.getScope(), END_TERMINATORS, includePaths, session, included);
 		sourceBuilder.parseInclude(argument, sourceFile, once);
 		return new Include(sourceBuilder.source);
 	}
 
 	private Source parseBlock(Scope scope, List<String> terminators, Parser parser) {
-		return new SourceBuilder(scope, terminators, includePaths, session).parseBody(parser);
+		return new SourceBuilder(scope, terminators, includePaths, session, recovery == null ? null : recovery.inBlock()).parseBody(parser);
 	}
 
 }

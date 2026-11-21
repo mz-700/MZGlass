@@ -103,7 +103,10 @@ public class SourceTest extends TestBase {
 
 	@Test
 	public void testOrg() {
-		assertArrayEquals(b(0xC3, 0x32, 0x40, 0x00, 0x18, 0xFD), assemble(
+		byte[] expected = new byte[0x4035];
+		expected[0] = (byte)0xC3; expected[1] = 0x32; expected[2] = 0x40;
+		expected[0x4033] = 0x18; expected[0x4034] = (byte)0xFD;
+		assertArrayEquals(expected, assemble(
 			" jp label",
 			" org 4032H",
 			"label:",
@@ -114,7 +117,9 @@ public class SourceTest extends TestBase {
 
 	@Test
 	public void testOrgLabel() {
-		assertArrayEquals(b(0xC3, 0x03, 0x00, 0x00), assemble(
+		byte[] expected = new byte[0x4033];
+		expected[0] = (byte)0xC3; expected[1] = 0x03;
+		assertArrayEquals(expected, assemble(
 			" jp label",
 			"label: org 4032H",
 			" nop"
@@ -123,7 +128,9 @@ public class SourceTest extends TestBase {
 
 	@Test
 	public void testOrgLabelBefore() {
-		assertArrayEquals(b(0xC3, 0x03, 0x00, 0x00), assemble(
+		byte[] expected = new byte[0x4033];
+		expected[0] = (byte)0xC3; expected[1] = 0x03;
+		assertArrayEquals(expected, assemble(
 			" jp label",
 			"label:",
 			" org 4032H",
@@ -133,7 +140,9 @@ public class SourceTest extends TestBase {
 
 	@Test
 	public void testOrgSelfAddress() {
-		assertArrayEquals(b(0xC3, 0x04, 0x01, 0x00), assemble(
+		byte[] expected = new byte[0x105];
+		expected[0] = (byte)0xC3; expected[1] = 0x04; expected[2] = 0x01;
+		assertArrayEquals(expected, assemble(
 			" jp label",
 			" org $ + 101H",
 			"label:",

@@ -17,10 +17,15 @@ final class SourceSession implements SourceProvider {
     private final Set<Path> loaded = new HashSet<>();
     private final Set<Path> active = new HashSet<>();
     final Consumer<Diagnostic> diagnostics;
+    final boolean ignoreMzfDirectives;
 
     SourceSession(SourceProvider provider, Consumer<Diagnostic> diagnostics) {
+        this(provider,diagnostics,false);
+    }
+    SourceSession(SourceProvider provider, Consumer<Diagnostic> diagnostics, boolean ignoreMzfDirectives) {
         this.provider = provider;
         this.diagnostics = diagnostics;
+        this.ignoreMzfDirectives = ignoreMzfDirectives;
     }
 
     @Override public Path identity(Path path) { return provider.identity(path); }

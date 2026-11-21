@@ -24,6 +24,11 @@ public abstract class InstructionObject {
 
 	public abstract byte[] getBytes();
 
+	/** Propagates output policy to composite instructions; ordinary bytes are unchanged. */
+	public byte[] getBytes(int originFill) {
+		return getBytes();
+	}
+
 	public Expression indexifyDirect(Register register, Expression size) {
 		return register.isIndex() ? new Add(IntegerLiteral.ONE, size) : size;
 	}

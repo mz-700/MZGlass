@@ -60,7 +60,12 @@ public class If extends InstructionFactory {
 
 		@Override
 		public byte[] getBytes() {
-			return getSelectedSource().getBytes();
+			return getBytes(0);
+		}
+
+		@Override
+		public byte[] getBytes(int originFill) {
+			return getSelectedSource().getBytes(originFill);
 		}
 
 		public Source getSelectedSource() {

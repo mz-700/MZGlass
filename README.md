@@ -44,6 +44,10 @@ Options:
   * `-O type` Output type. Supported values are `BIN` for a raw binary file
     (the default), and `MZF` for a Sharp MZ-700 program file.
 
+  * `-F byte` Fill byte for forward `ORG` gaps, default `0`. Accepts decimal,
+    `$FF` or `0xFF` notation, in the range 0–255. For ROM-oriented output use
+    `-F 0xFF`. It does not alter explicit data, `DS` fill or phased code.
+
 Note that [Java 25](http://java.com/getjava) must be installed to run Glass.
 To check your Java version, invoke the `java -version` command.
 
@@ -51,7 +55,7 @@ Java library API
 ----------------
 
 MZGlass can also be used in-process through `org.tbc.glass.api`. The Maven
-coordinates for the development version are `org.tbc:MZGlass:1.2-SNAPSHOT`;
+coordinates for the development version are `org.tbc:MZGlass:1.3-SNAPSHOT`;
 install it locally with `mvn install`. The Java module name is `org.tbc.glass`.
 The executable JAR and the existing command-line options remain available.
 
@@ -96,14 +100,29 @@ concurrently; a custom provider shared between calls must support that use.
 
 The result contains raw object bytes and immutable diagnostics, with defensive
 copies of byte arrays. Warnings are returned as diagnostics rather than printed
-by the library API. Failed assembly returns no partial bytes. The analysis is
-strict and returns its first error; recovery for unfinished editor statements
-and collecting multiple independent errors are future work. This API does not
-expose symbol/reference indexes. To build MZF bytes in memory, use
+by the library API. Failed assembly returns no partial bytes. Strict assembly
+returns the first fatal error. To build MZF bytes in memory, use
 `assemble(request, SourceProvider.fileSystem(), Assembler.OutputType.MZF)`.
 The default remains BIN. Both paths share the command-line object encoder; MZF
 metadata and size errors become structured diagnostics. The service writes no
 files. The command-line assembler also retains symbol, listing and debug output.
+
+Editors can call `analyze(request, provider)` on each source snapshot. It recovers
+from syntax errors at the next physical line. After reporting a missing include,
+it continues with the rest of the source and its other includes. It checks
+independent built-in operand forms in the parsed code and skips operand checking
+inside unresolved conditional and macro blocks. When recovery was needed, it
+returns no object bytes and defers checks that require a complete assembly.
+Snapshots that need no recovery use the normal assembly passes and return raw
+BIN bytes on success.
+
+Forward `ORG` gaps are included in BIN/MZF output and the MZF payload-size field.
+Existing API calls use zero fill. To select a different gap byte, use
+`assemble(request, provider, outputType, originFill)`; for example, pass `255`
+for `$FF` gaps when preparing ROM data. The lower-level equivalents are
+`new Assembler(path, includePaths, originFill)`,
+`source.assemble(output, originFill)` and `source.getBytes(originFill)`.
+Fill settings are per call; no global mutable assembly configuration is introduced.
 
 Diagnostic ranges use zero-based UTF-16 offsets in LF-normalized source text,
 with exclusive ends. The primary range is the innermost error context; additional
@@ -335,12 +354,36 @@ Directives
 ----------
 
 #### `org`: Origin
-  
-The `org` is the only directive that is not an instruction.
-Changes the address location counter and sets a new origin for subsequent
-statements.
 
-    org $100
+The initial `ORG` establishes the payload base without padding from zero to that
+address. A subsequent forward `ORG` inserts padding from the physical output end
+to the requested origin. The default padding byte is `$00`; `-F` or the library
+fill argument can select another byte. A same-address origin adds no padding.
+
+    org $1200
+    db $AA
+    org $1204
+    db $BB
+
+This produces `AA 00 00 00 BB`, with three padding bytes for `$1201..$1203`.
+Padding participates in object length, MZF payload size and reserved-section
+capacity checks. Includes, macros and selected conditional branches share the
+surrounding output position; they do not restart the file at each origin.
+A `SECTION` remains anchored to its reserved `DS` range, including its first origin.
+
+Backward/overlapping physical origins are assembly errors, not implicit rewinds
+or overwrites. An initial origin outside the 16-bit range remains supported;
+output-gap arithmetic is checked rather than wrapped.
+
+`PHASE`/`DEPHASE` emits code/data contiguously without origin padding. The existing
+logical-counter restoration behavior described below is unchanged. An `ORG`
+inside an active phase continues to change its logical counter only; an `ORG`
+after `DEPHASE` measures its physical gap from all bytes actually emitted,
+including the phased block.
+
+This intentionally corrects earlier MZGlass behavior that concatenated physical
+`ORG` sections without their gaps. Both command-line and in-process assembly use
+the corrected layout.
 
 #### `phase`, `dephase`: Phased code
     
@@ -864,3 +907,30 @@ the project information section.
 
 You are also free to re-use code for your own projects, provided you abide by
 the license terms.
+
+IDE assembly policy and emission metadata
+----------------------------------------
+
+`AssemblyRequest(source, includes, overrides, true)` opts into ignoring any
+case-insensitive `mzf_*` token in directive position. Arguments are discarded by
+the parser before expression/string parsing, including malformed values and
+unknown suffixes. Valid labels, source coordinates and ordinary diagnostics are
+preserved across main files, includes, conditionals and macro copies. The default
+three-argument request and command-line assembler retain their existing behavior.
+The IDE policy is per request/parser; it does not change global assembler state.
+
+`AssemblyResult.emissions()` describes raw payload offsets/lengths, logical
+addresses, source ranges and `DATA` versus `ORIGIN_PADDING`. Offsets exclude any
+MZF header even when the returned object uses that container. Metadata is produced
+by the same output traversal as the bytes and retains mappings through PHASE,
+conditionals, included/macro-expanded lines and reserved sections. Virtual DS
+sections contribute no emitted coverage. CLI byte output and origin-fill defaults
+are unchanged.
+
+`Assembler.encodeMzfObject(payload, title, comments, load, run)` shares the existing
+MZF encoder with callers supplying their own metadata. It validates word fields,
+uses the MZ-700 character table and records payload-only size. IDE clients assemble
+raw BIN with the opt-in directive policy, apply their project validations and call
+this encoder with filtered/truncated project text. Ordinary CLI MZF assembly still
+uses source metadata. `IdeAssemblyTest` covers policy isolation and emission maps;
+`OriginLayoutTest` retains the ORG/PHASE and CLI/API parity checks.

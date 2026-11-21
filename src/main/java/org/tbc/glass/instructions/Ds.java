@@ -7,11 +7,14 @@ import java.util.List;
 
 import org.tbc.glass.AssemblyException;
 import org.tbc.glass.Scope;
+import org.tbc.glass.Source;
 import org.tbc.glass.expressions.Expression;
 import org.tbc.glass.expressions.Identifier;
 import org.tbc.glass.expressions.IntegerLiteral;
 import org.tbc.glass.expressions.Schema;
 import org.tbc.glass.expressions.SectionContext;
+import org.tbc.glass.api.Emission;
+import org.tbc.glass.api.SourceRange;
 
 public class Ds extends InstructionFactory implements SectionContext {
 
@@ -72,11 +75,15 @@ public class Ds extends InstructionFactory implements SectionContext {
 
 		@Override
 		public byte[] getBytes() {
+			return getBytes(0);
+		}
+
+		@Override
+		public byte[] getBytes(int originFill) {
 			ByteArrayOutputStream sourceByteStream = new ByteArrayOutputStream(size.getInteger());
-			for (Section section : sections) {
-				byte[] sectionBytes = section.getSource().getBytes();
-				sourceByteStream.write(sectionBytes, 0, sectionBytes.length);
-			}
+			byte[] sectionBytes = Source.getSectionBytes(sections.stream().map(Section::getSource).toList(),
+					context.getAddress(), originFill);
+			sourceByteStream.write(sectionBytes, 0, sectionBytes.length);
 
 			if (sourceByteStream.size() > size.getInteger())
 				throw new AssemblyException("Section size exceeds space (required: " +
@@ -90,6 +97,19 @@ public class Ds extends InstructionFactory implements SectionContext {
 			sourceByteStream.write(padding, 0, padding.length);
 
 			return sourceByteStream.toByteArray();
+		}
+
+		/** Keeps nested section/PHASE/ORG mappings, and distinguishes explicit DS fill from origin padding. */
+		public Source.ObjectCode getObjectCode(int originFill, SourceRange location) {
+			var nested=Source.getSectionObjectCode(sections.stream().map(Section::getSource).toList(),context.getAddress(),originFill);
+			byte[] section=nested.bytes(); int length=size.getInteger();
+			if(section.length>length) throw new AssemblyException("Section size exceeds space (required: " + section.length + " bytes, available: " + length + " bytes).");
+			if(virtual) return new Source.ObjectCode(new byte[0],List.of());
+			byte[] object=Arrays.copyOf(section,length); Arrays.fill(object,section.length,length,(byte)value.getInteger());
+			List<Emission> emissions=new ArrayList<>(nested.emissions());
+			if(length>section.length) emissions.add(new Emission(section.length,length-section.length,
+					(long)context.getAddress().getInteger()+section.length,Emission.Kind.DATA,location));
+			return new Source.ObjectCode(object,emissions);
 		}
 
 	}

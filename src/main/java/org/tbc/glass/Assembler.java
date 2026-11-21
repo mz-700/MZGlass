@@ -17,6 +17,7 @@ import org.tbc.glass.SourceFile.SourceFileSpan;
 public class Assembler {
 
     private final Source source;
+	private final int originFill;
 	private static final int MZF_HEADER_SIZE = 128;
 
 	/**
@@ -48,6 +49,7 @@ public class Assembler {
 		Path listPath = null;
 		Path debugPath = null;
 		OutputType outputType = OutputType.BIN;
+		int originFill = 0;
 		List<Path> includePaths = new ArrayList<>();
 		for (int i = 0; i < args.length; i++) {
 			if (args[i].equals("-I")) {
@@ -62,6 +64,10 @@ public class Assembler {
 				if (++i >= args.length)
 					throw new AssemblyException("Missing argument value.");
 				debugPath = Paths.get(args[i]);
+			} else if (args[i].equals("-F")) {
+				if (++i >= args.length)
+					throw new AssemblyException("Missing argument value.");
+				originFill = parseOriginFill(args[i]);
 			} else if (args[i].equals("-O")) {
 				if (++i >= args.length)
 					throw new AssemblyException("Missing argument value.");
@@ -77,7 +83,7 @@ public class Assembler {
 			}
 		}
 
-		Assembler instance = new Assembler( sourcePath, includePaths );
+		Assembler instance = new Assembler(sourcePath, includePaths, originFill);
 		if (outputType == OutputType.MZF)
 			objectPath = withMzfExtension(objectPath);
 		instance.writeObject( objectPath, outputType );
@@ -99,7 +105,28 @@ public class Assembler {
 	}
 
 	public Assembler(Path sourcePath, List<Path> includePaths) {
+		this(sourcePath, includePaths, 0);
+	}
+
+	/** Selects the byte used only for forward ORG gaps (for example, 0xFF for ROM). */
+	public Assembler(Path sourcePath, List<Path> includePaths, int originFill) {
+		if (originFill < 0 || originFill > 255)
+			throw new IllegalArgumentException("ORG fill must be a byte (0..255).");
+		this.originFill = originFill;
 		source = new SourceBuilder(includePaths).parse(sourcePath);
+	}
+
+	private static int parseOriginFill(String text) {
+		try {
+			int value = text.startsWith("$") ? Integer.parseInt(text.substring(1), 16)
+					: text.startsWith("0x") || text.startsWith("0X") ? Integer.parseInt(text.substring(2), 16)
+					: Integer.parseInt(text);
+			if (value >= 0 && value <= 255)
+				return value;
+		} catch (NumberFormatException e) {
+			// Report malformed/out-of-range command-line settings consistently.
+		}
+		throw new AssemblyException("ORG fill must be a byte (0..255): " + text);
 	}
 
 	public void writeObject(Path objectPath) {
@@ -117,7 +144,7 @@ public class Assembler {
 
 	private byte[] assemble() throws IOException {
 		try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-			source.assemble(output);
+			source.assemble(output, originFill);
 			return output.toByteArray();
 		}
 	}
@@ -133,19 +160,24 @@ public class Assembler {
 		Source.MzfConfig mzfConfig = source.getMzfConfig();
 		if (!mzfConfig.hasLoadAddress())
 			throw new AssemblyException("MZF_LOAD is required for MZF output.");
+		return encodeMzfObject(object,mzfConfig.getTitle(),mzfConfig.getComments(),mzfConfig.getLoadAddress(),mzfConfig.getStartAddress());
+	}
+
+	/** Shared MZF encoder; IDE callers supply project-owned metadata without injecting source. */
+	public static byte[] encodeMzfObject(byte[] object, String title, String comments, int loadAddress, int runAddress) {
 
 		int payloadSize = object.length;
 		checkWord("MZF size", payloadSize);
-		checkWord("MZF_LOAD", mzfConfig.getLoadAddress());
-		checkWord("MZF_START", mzfConfig.getStartAddress());
+		checkWord("MZF_LOAD", loadAddress);
+		checkWord("MZF_START", runAddress);
 
 		byte[] mzfObject = new byte[MZF_HEADER_SIZE + payloadSize];
 		mzfObject[0] = 1;
-		writeTextField(mzfObject, 1, 17, mzfConfig.getTitle(), true);
+		writeTextField(mzfObject, 1, 17, title, true);
 		writeWord(mzfObject, 18, payloadSize);
-		writeWord(mzfObject, 20, mzfConfig.getLoadAddress());
-		writeWord(mzfObject, 22, mzfConfig.getStartAddress());
-		writeTextField(mzfObject, 24, 104, mzfConfig.getComments(), false);
+		writeWord(mzfObject, 20, loadAddress);
+		writeWord(mzfObject, 22, runAddress);
+		writeTextField(mzfObject, 24, 104, comments, false);
 		System.arraycopy(object, 0, mzfObject, MZF_HEADER_SIZE, object.length);
 		return mzfObject;
 	}
