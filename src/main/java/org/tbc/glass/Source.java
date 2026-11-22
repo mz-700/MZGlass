@@ -6,6 +6,7 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.function.Consumer;
 
 import org.tbc.glass.expressions.Expression;
 import org.tbc.glass.expressions.IntegerLiteral;
@@ -15,12 +16,18 @@ import org.tbc.glass.api.SourceRange;
 public class Source {
 
 	private final Scope scope;
+	private final Consumer<AssemblyException> registrationErrors;
 	private final MzfConfig mzfConfig = new MzfConfig();
 	private List<Line> lines = new ArrayList<>();
 	private Expression startAddress = IntegerLiteral.ZERO;
 
 	public Source(Scope scope) {
+		this(scope, null);
+	}
+
+	Source(Scope scope, Consumer<AssemblyException> registrationErrors) {
 		this.scope = scope;
+		this.registrationErrors = registrationErrors;
 	}
 
 	public Scope getScope() {
@@ -72,8 +79,15 @@ public class Source {
 	}
 
 	public void register(Scope scope) {
-		for (Line line : lines)
-			line.register(scope);
+		for (Line line : lines) {
+			try {
+				line.register(scope);
+			} catch (AssemblyException error) {
+				if (registrationErrors == null)
+					throw error;
+				registrationErrors.accept(error);
+			}
+		}
 	}
 
 	public void expand() {

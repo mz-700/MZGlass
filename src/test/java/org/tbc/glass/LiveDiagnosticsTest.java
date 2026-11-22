@@ -87,6 +87,31 @@ class LiveDiagnosticsTest {
         assertEquals(List.of(mainErrors.getFirst()), strict.diagnostics());
     }
 
+    @Test void continuesOperandChecksAfterADuplicateLabelInAnInclude() {
+        Path main = directory.resolve("main.asm"), driver = directory.resolve("driver.inc");
+        String mainText = " include \"driver.inc\"\nSTART:\n\n LD A,BC\n DB 'xxx'\n DB 'yyy'\n";
+        String driverText = ".wait: nop\n.wait: nop\nPAIR: equ bc\n ld a,PAIR\n";
+        var request = new AssemblyRequest(main, List.of(), Map.of(main, mainText, driver, driverText));
+
+        var live = service.analyze(request, SourceProvider.fileSystem());
+        assertFalse(live.succeeded());
+        var mainErrors = live.diagnostics().stream().filter(error -> error.range().path().equals(main)).toList();
+        assertEquals(List.of("Syntax error.", "Syntax error.", "Invalid arguments."),
+                mainErrors.stream().map(Diagnostic::message).toList());
+        var operandError = mainErrors.getLast().range();
+        assertTrue(operandError.from() <= mainText.indexOf("LD A,BC") && operandError.to() >= mainText.indexOf("LD A,BC") + "LD A,BC".length());
+        var driverErrors = live.diagnostics().stream().filter(error -> error.range().path().equals(driver)).toList();
+        assertEquals(List.of("Can not redefine symbol: .wait", "Invalid arguments."),
+                driverErrors.stream().map(Diagnostic::message).toList());
+        assertTrue(driverErrors.stream().allMatch(error -> error.related().getFirst().path().equals(main)));
+
+        var strict = service.assemble(request);
+        assertEquals(List.of(mainErrors.getFirst()), strict.diagnostics());
+        String fixedStrings = mainText.replace('\'', '"');
+        var strictWithValidSyntax = service.assemble(new AssemblyRequest(main, List.of(), Map.of(main, fixedStrings, driver, driverText)));
+        assertEquals(List.of(driverErrors.getFirst()), strictWithValidSyntax.diagnostics());
+    }
+
     @Test void cleanLiveAnalysisRetainsStrictAssemblyChecksAndBytes() {
         Path main = directory.resolve("main.asm");
         var valid = new AssemblyRequest(main, List.of(), Map.of(main, " LD A,B\nWAIT_CONNECT: DB \"WAITING\",$0D\n"));

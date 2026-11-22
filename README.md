@@ -55,7 +55,7 @@ Java library API
 ----------------
 
 MZGlass can also be used in-process through `org.tbc.glass.api`. The Maven
-coordinates for the development version are `org.tbc:MZGlass:1.3-SNAPSHOT`;
+coordinates for the development version are `org.tbc:MZGlass:1.4-SNAPSHOT`;
 install it locally with `mvn install`. The Java module name is `org.tbc.glass`.
 The executable JAR and the existing command-line options remain available.
 
@@ -109,8 +109,10 @@ files. The command-line assembler also retains symbol, listing and debug output.
 
 Editors can call `analyze(request, provider)` on each source snapshot. It recovers
 from syntax errors at the next physical line. After reporting a missing include,
-it continues with the rest of the source and its other includes. It checks
-independent built-in operand forms in the parsed code and skips operand checking
+it continues with the rest of the source and its other includes. Symbol
+registration errors such as duplicate labels are reported as well, and checking
+continues. The live check validates independent built-in operand forms in the
+parsed code and skips operand checking
 inside unresolved conditional and macro blocks. When recovery was needed, it
 returns no object bytes and defers checks that require a complete assembly.
 Snapshots that need no recovery use the normal assembly passes and return raw
@@ -722,6 +724,28 @@ repeated.
 All symbols defined in a indefinite repeat block are local. If a repeat is
 labeled, the inner repeat scopes can be accessed by index, e.g.: `mylist.0`.
     
+#### Dot-local labels
+
+In ordinary source, a label starting with a dot belongs to the most recent
+label whose name begins without a dot. References such as `.wait` use the
+same owner, including forward references. Use the qualified name, such as
+`first.wait`, to reference it from elsewhere.
+
+```asm
+first:  jr .wait
+.wait:  ret
+second: jr .wait
+.wait:  ret
+        dw first.wait, second.wait
+```
+
+Each source file starts with no owner, and an include leaves the caller's
+owner as it was. A leading-dot name before the first owner retains its literal
+spelling. An `IF` branch or `SECTION` inherits the current owner and restores
+it on exit. Explicit procedure, macro, repeat, structure and relocation scopes
+keep their own symbol rules. For example, a literal `.wait` in `routine: PROC`
+is still available as `routine..wait`.
+
 #### `proc`, `endp`:  Procedure
     
 Defines a section of code as a procedure. Currently mostly serves to

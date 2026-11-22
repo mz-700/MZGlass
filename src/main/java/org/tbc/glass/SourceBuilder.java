@@ -47,6 +47,7 @@ public class SourceBuilder {
 
 	private final SourceSession session;
 	private final Recovery recovery;
+	private final DotLocalLabels dotLabels;
 
 	private record OperandCheck(Line line, Consumer<AssemblyException> report) {}
 
@@ -91,15 +92,18 @@ public class SourceBuilder {
 	private SourceBuilder(List<Path> includePaths, SourceProvider sourceProvider, Consumer<Diagnostic> diagnostics,
 			boolean ignoreMzfDirectives, Recovery recovery) {
 		this(new Scope(new GlobalScope()), END_TERMINATORS, List.copyOf(includePaths),
-				new SourceSession(Objects.requireNonNull(sourceProvider, "sourceProvider"), diagnostics,ignoreMzfDirectives), recovery);
+				new SourceSession(Objects.requireNonNull(sourceProvider, "sourceProvider"), diagnostics,ignoreMzfDirectives), recovery,
+				new DotLocalLabels());
 	}
 
-	private SourceBuilder(Scope scope, List<String> terminators, List<Path> includePaths, SourceSession session, Recovery recovery) {
-		this.source = new Source(scope);
+	private SourceBuilder(Scope scope, List<String> terminators, List<Path> includePaths, SourceSession session, Recovery recovery,
+			DotLocalLabels dotLabels) {
+		this.source = new Source(scope, recovery == null ? null : recovery.report());
 		this.terminators = terminators;
 		this.includePaths = includePaths;
 		this.session = session;
 		this.recovery = recovery;
+		this.dotLabels = dotLabels;
 	}
 
 	public boolean hasLoadedSourceFile(Path path) {
@@ -151,7 +155,8 @@ public class SourceBuilder {
 	private Source parseBody(Parser parser) {
 		parser.ignoreMzfDirectives(session.ignoreMzfDirectives);
 		while (true) {
-			Line line = recovery == null ? parser.parse(source.getScope()) : parser.parseRecovering(source.getScope(), recovery.report());
+			Line line = recovery == null ? parser.parse(source.getScope(), dotLabels)
+					: parser.parseRecovering(source.getScope(), dotLabels, recovery.report());
 			line.setDiagnosticConsumer(session.diagnostics);
 
 			try {
@@ -173,11 +178,6 @@ public class SourceBuilder {
 	public void validateRecoveredOperands() {
 		if (recovery == null)
 			throw new IllegalStateException("Operand recovery requires a diagnostics source builder.");
-		try {
-			source.register();
-		} catch (AssemblyException incompleteSymbols) {
-			return;
-		}
 		Scope builtins = source.getScope().getParent();
 		for (OperandCheck check : recovery.operands()) {
 			Line line = check.line();
@@ -226,13 +226,13 @@ public class SourceBuilder {
 			return new Rel(parseBlock(line.getScope(), ENDREL_TERMINATORS, parser));
 		case "if":
 		case "IF":
-			Source thenBlock = parseBlock(new Scope(line.getScope()), ELSE_TERMINATORS, parser);
+			Source thenBlock = parseBlock(new Scope(line.getScope()), ELSE_TERMINATORS, parser, copyDotLabels());
 			Source elseBlock = !ENDIF_TERMINATORS.contains(thenBlock.getLastLine().getMnemonic()) ?
-					parseBlock(new Scope(line.getScope()), ENDIF_TERMINATORS, parser) : new Source(new Scope(line.getScope()));
+					parseBlock(new Scope(line.getScope()), ENDIF_TERMINATORS, parser, copyDotLabels()) : new Source(new Scope(line.getScope()));
 			return new If(thenBlock, elseBlock);
 		case "section":
 		case "SECTION":
-			return new Section(parseBlock(source.getScope(), ENDS_TERMINATORS, parser));
+			return new Section(parseBlock(source.getScope(), ENDS_TERMINATORS, parser, copyDotLabels()));
 		case "ds":
 		case "DS":
 			return new Ds();
@@ -280,13 +280,22 @@ public class SourceBuilder {
 		if (!argument.is(Type.STRING))
 			throw new AssemblyException("A string literal is expected.");
 		Recovery included = recovery == null ? null : recovery.includedAt(line.getSourceSpan());
-		SourceBuilder sourceBuilder = new SourceBuilder(source.getScope(), END_TERMINATORS, includePaths, session, included);
+		SourceBuilder sourceBuilder = new SourceBuilder(source.getScope(), END_TERMINATORS, includePaths, session, included,
+				dotLabels == null ? null : new DotLocalLabels());
 		sourceBuilder.parseInclude(argument, sourceFile, once);
 		return new Include(sourceBuilder.source);
 	}
 
 	private Source parseBlock(Scope scope, List<String> terminators, Parser parser) {
-		return new SourceBuilder(scope, terminators, includePaths, session, recovery == null ? null : recovery.inBlock()).parseBody(parser);
+		return parseBlock(scope, terminators, parser, null);
+	}
+
+	private Source parseBlock(Scope scope, List<String> terminators, Parser parser, DotLocalLabels labels) {
+		return new SourceBuilder(scope, terminators, includePaths, session, recovery == null ? null : recovery.inBlock(), labels).parseBody(parser);
+	}
+
+	private DotLocalLabels copyDotLabels() {
+		return dotLabels == null ? null : dotLabels.copy();
 	}
 
 }

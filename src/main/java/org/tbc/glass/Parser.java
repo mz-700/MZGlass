@@ -19,6 +19,7 @@ public class Parser {
 	private boolean ignoreMzfDirectives;
 	private Scope scope;
 	private Scope lineScope;
+	private DotLocalLabels dotLabels;
 	private int currentColumn;
 	private LineBuilder lineBuilder = new LineBuilder();
 
@@ -44,7 +45,12 @@ public class Parser {
 	void ignoreMzfDirectives(boolean ignore) { this.ignoreMzfDirectives = ignore; }
 
 	public Line parse(Scope scope) {
+		return parse(scope, null);
+	}
+
+	Line parse(Scope scope, DotLocalLabels dotLabels) {
 		this.scope = scope;
+		this.dotLabels = dotLabels;
 		this.lineScope = new Scope(scope);
 
 		SourceFileSpan span = null;
@@ -83,10 +89,10 @@ public class Parser {
 	}
 
 	/** The reader has consumed the physical line that failed. Start fresh on the next one. */
-	Line parseRecovering(Scope scope, Consumer<AssemblyException> report) {
+	Line parseRecovering(Scope scope, DotLocalLabels dotLabels, Consumer<AssemblyException> report) {
 		while (true) {
 			try {
-				return parse(scope);
+				return parse(scope, dotLabels);
 			} catch (AssemblyException error) {
 				report.accept(error);
 				state = labelStartState;
@@ -95,6 +101,14 @@ public class Parser {
 				accumulator.setLength(0);
 			}
 		}
+	}
+
+	private void setLabel(String name) {
+		lineBuilder.setLabel(dotLabels == null ? name : dotLabels.declare(name));
+	}
+
+	private String qualify(String name) {
+		return DotLocalLabels.qualify(dotLabels == null ? null : dotLabels.owner(), name);
 	}
 
 	void skipToArgumentStartState(String mnemonic)
@@ -169,13 +183,13 @@ public class Parser {
 						return labelStartState;
 					}
 				} else if (character == ':' || isWhitespace(character)) {
-					lineBuilder.setLabel(identifier);
+					setLabel(identifier);
 					return statementStartState;
 				} else if (character == ';') {
-					lineBuilder.setLabel(identifier);
+					setLabel(identifier);
 					return commentReadState;
 				} else if (character == '\n' || character == '\0') {
-					lineBuilder.setLabel(identifier);
+					setLabel(identifier);
 					return labelStartState;
 				}
 			}
@@ -207,7 +221,7 @@ public class Parser {
 				accumulator.append(character);
 				return statementReadState;
 			} if (character == ':') {
-				lineBuilder.setLabel(accumulator.toString());
+				setLabel(accumulator.toString());
 				accumulator.setLength(0);
 				return statementStartState;
 			} else {
@@ -218,7 +232,7 @@ public class Parser {
 					accumulator.setLength(0);
 					return commentReadState.parse(character);
 				}
-				lineBuilder.setMnemonic(mnemonic, currentColumn - mnemonic.length());
+				lineBuilder.setMnemonic(qualify(mnemonic), currentColumn - mnemonic.length());
 				accumulator.setLength(0);
 				if (isWhitespace(character)) {
 					return isRawArgumentMnemonic(mnemonic) ? rawArgumentStartState : argumentStartState;
@@ -336,7 +350,7 @@ public class Parser {
 				accumulator.append(character);
 				return argumentIdentifierState;
 			} else {
-				expressionBuilder.addValueToken(new Identifier(accumulator.toString(), scope));
+				expressionBuilder.addValueToken(new Identifier(qualify(accumulator.toString()), scope));
 				accumulator.setLength(0);
 				return argumentOperatorState.parse(character);
 			}

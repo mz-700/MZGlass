@@ -34,7 +34,7 @@ public final class AssemblyService {
         return assemble(request, fallback, outputType, originFill, false);
     }
 
-    /** Analyze an editing snapshot with recovery for parser errors and missing includes.
+    /** Analyze an editing snapshot with recovery for parser errors, missing includes, and symbol registration errors.
      * Recovered snapshots get independent operand checks.
      * Clean snapshots use the regular assembler checks and return raw BIN bytes. */
     public AssemblyResult analyze(AssemblyRequest request, SourceProvider fallback) {
@@ -51,11 +51,11 @@ public final class AssemblyService {
                             error -> diagnostics.add(Diagnostic.fromException(error, request.sourcePath())))
                     : new SourceBuilder(request.includePaths(), inputs, diagnostics::add, request.ignoreMzfDirectives());
             Source source = builder.parse(request.sourcePath());
+            source.register();
             if (recover && diagnostics.stream().anyMatch(diagnostic -> diagnostic.severity() == Diagnostic.Severity.ERROR)) {
                 builder.validateRecoveredOperands();
                 return new AssemblyResult(new byte[0], diagnostics);
             }
-            source.register();
             source.expand();
             source.resolve();
             var object = source.getObjectCode(originFill);
