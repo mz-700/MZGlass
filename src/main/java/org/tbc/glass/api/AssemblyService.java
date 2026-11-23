@@ -11,6 +11,8 @@ import org.tbc.glass.SourceProvider;
 
 /** Stateless, in-process assembly. Each invocation owns fresh mutable assembly state. */
 public final class AssemblyService {
+    public enum ErrorMode { FAIL_FAST, COLLECT_ALL }
+
     public AssemblyResult assemble(AssemblyRequest request) {
         return assemble(request, SourceProvider.fileSystem());
     }
@@ -29,9 +31,34 @@ public final class AssemblyService {
     /** Selects a byte for ORG gaps, independently of source data and DS fill values. */
     public AssemblyResult assemble(AssemblyRequest request, SourceProvider fallback,
                                    Assembler.OutputType outputType, int originFill) {
+        return assemble(request, fallback, outputType, originFill, ErrorMode.FAIL_FAST);
+    }
+
+    /** Collects independent errors where assembly can recover. Failed builds return no object code. */
+    public AssemblyResult assemble(AssemblyRequest request, SourceProvider fallback,
+                                   Assembler.OutputType outputType, int originFill, ErrorMode errorMode) {
         if (originFill < 0 || originFill > 255)
             throw new IllegalArgumentException("ORG fill must be a byte (0..255).");
+        if (java.util.Objects.requireNonNull(errorMode) == ErrorMode.COLLECT_ALL)
+            return assembleCollecting(request, fallback, outputType, originFill);
         return assemble(request, fallback, outputType, originFill, false);
+    }
+
+    private AssemblyResult assembleCollecting(AssemblyRequest request, SourceProvider fallback,
+                                              Assembler.OutputType outputType, int originFill) {
+        List<Diagnostic> diagnostics = new ArrayList<>();
+        try {
+            var assembled = Assembler.assembleCollecting(request, fallback, originFill, diagnostics::add,
+                    error -> diagnostics.add(Diagnostic.fromException(error, request.sourcePath())));
+            if (assembled != null) {
+                var object = assembled.object();
+                return new AssemblyResult(Assembler.encodeObject(assembled.source(), object.bytes(), outputType),
+                        diagnostics, object.emissions());
+            }
+        } catch (AssemblyException error) {
+            diagnostics.add(Diagnostic.fromException(error, request.sourcePath()));
+        }
+        return new AssemblyResult(new byte[0], diagnostics);
     }
 
     /** Analyze an editing snapshot with recovery for parser errors, missing includes, and symbol registration errors.

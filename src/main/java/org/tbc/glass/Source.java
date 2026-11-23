@@ -210,7 +210,11 @@ public class Source {
 		@Override public byte[] bytes() { return bytes.clone(); }
 	}
 	public ObjectCode getObjectCode(int originFill) {
+		return getObjectCode(originFill, null);
+	}
+	ObjectCode getObjectCode(int originFill, Consumer<AssemblyException> errors) {
 		ObjectCodeOutput output = new ObjectCodeOutput(startAddress,originFill,false,true);
+		output.errors = errors;
 		output.write(this);
 		return new ObjectCode(output.bytes.toByteArray(),output.emissions);
 	}
@@ -237,6 +241,7 @@ public class Source {
 		private final int originFill;
 		private final boolean metadata;
 		private final List<Emission> emissions = new ArrayList<>();
+		private Consumer<AssemblyException> errors;
 		private long address;
 		private boolean anchored;
 		private int phaseDepth;
@@ -252,43 +257,58 @@ public class Source {
 
 		void write(Source source) {
 			for (Line line : source.lines) {
-				if (line.getInstructionObject() instanceof org.tbc.glass.instructions.Org.Org_N org) {
-					try {
-						if (phaseDepth == 0)
-							origin(org.getOrigin().getInteger(),line);
-					} catch (AssemblyException e) {
-						e.addContext(line.getSourceSpan());
-						throw e;
-					}
-				} else if (line.getInstructionObject() instanceof org.tbc.glass.instructions.If.IfObject conditional) {
-					try {
-						write(conditional.getSelectedSource());
-					} catch (AssemblyException e) {
-						e.addContext(line.getSourceSpan());
-						throw e;
-					}
-				} else {
-					if (line.getInstructionObject() instanceof org.tbc.glass.instructions.Phase.PhaseObject)
-						phaseDepth++;
-					else if (line.getInstructionObject() instanceof org.tbc.glass.instructions.Dephase.DephaseObject)
-						phaseDepth--;
-
-					byte[] object;
-					if(metadata && line.getInstructionObject() instanceof org.tbc.glass.instructions.Ds.Ds_N_N ds) {
-						try {
-							ObjectCode nested = ds.getObjectCode(originFill,line.getSourceSpan().toRange());
-							object=nested.bytes();
-							for(Emission emission:nested.emissions()) emissions.add(emission.shifted(bytes.size()));
-						} catch(AssemblyException error) { error.addContext(line.getSourceSpan()); throw error; }
-					} else {
-						object = line.getBytes(originFill);
-						if(metadata && object.length>0) emissions.add(new Emission(bytes.size(),object.length,
-								line.getScope().getAddress().getInteger(),Emission.Kind.DATA,line.getSourceSpan().toRange()));
-					}
-					bytes.write(object, 0, object.length);
-					address += object.length;
-					anchored |= object.length != 0;
+				try {
+					write(line);
+				} catch (AssemblyException error) {
+					if (errors == null)
+						throw error;
+					errors.accept(error);
+					// Resolution succeeded. Keep the physical cursor at the planned address
+					// so a failed encoding does not affect checks on later statements.
+					int size = line.getSize().getInteger();
+					address += size;
+					anchored |= size != 0;
 				}
+			}
+		}
+
+		private void write(Line line) {
+			if (line.getInstructionObject() instanceof org.tbc.glass.instructions.Org.Org_N org) {
+				try {
+					if (phaseDepth == 0)
+						origin(org.getOrigin().getInteger(),line);
+				} catch (AssemblyException e) {
+					e.addContext(line.getSourceSpan());
+					throw e;
+				}
+			} else if (line.getInstructionObject() instanceof org.tbc.glass.instructions.If.IfObject conditional) {
+				try {
+					write(conditional.getSelectedSource());
+				} catch (AssemblyException e) {
+					e.addContext(line.getSourceSpan());
+					throw e;
+				}
+			} else {
+				if (line.getInstructionObject() instanceof org.tbc.glass.instructions.Phase.PhaseObject)
+					phaseDepth++;
+				else if (line.getInstructionObject() instanceof org.tbc.glass.instructions.Dephase.DephaseObject)
+					phaseDepth--;
+
+				byte[] object;
+				if(metadata && line.getInstructionObject() instanceof org.tbc.glass.instructions.Ds.Ds_N_N ds) {
+					try {
+						ObjectCode nested = ds.getObjectCode(originFill,line.getSourceSpan().toRange());
+						object=nested.bytes();
+						for(Emission emission:nested.emissions()) emissions.add(emission.shifted(bytes.size()));
+					} catch(AssemblyException error) { error.addContext(line.getSourceSpan()); throw error; }
+				} else {
+					object = line.getBytes(originFill);
+					if(metadata && object.length>0) emissions.add(new Emission(bytes.size(),object.length,
+							line.getScope().getAddress().getInteger(),Emission.Kind.DATA,line.getSourceSpan().toRange()));
+				}
+				bytes.write(object, 0, object.length);
+				address += object.length;
+				anchored |= object.length != 0;
 			}
 		}
 

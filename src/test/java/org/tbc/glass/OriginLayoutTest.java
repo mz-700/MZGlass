@@ -216,6 +216,44 @@ class OriginLayoutTest extends TestBase {
         assertTrue(runCli(1, "-F", "256", main.toString(), output.toString()).contains("ORG fill must be a byte"));
     }
 
+    @Test void commandLineCanReportIndependentErrorsWithoutReplacingOutput() throws Exception {
+        Path main = directory.resolve("multiple-errors.asm");
+        Path include = directory.resolve("errors.inc");
+        Path output = directory.resolve("multiple-errors.bin");
+        Files.writeString(main, " LD A,BC\n INCLUDE \"errors.inc\"\n PUSH A\n");
+        Files.writeString(include, " DB 'bad literal'\n");
+        Files.write(output, new byte[] {42});
+
+        String first = runCli(1, main.toString(), output.toString());
+        assertEquals(1, first.lines().filter(line -> line.contains(": error: ")).count(), first);
+        assertTrue(first.contains("errors.inc:1:"), first);
+
+        String all = runCli(1, "--all-errors", main.toString(), output.toString());
+        assertEquals(3, all.lines().filter(line -> line.contains(": error: ")).count(), all);
+        assertTrue(all.contains("multiple-errors.asm:1:1: error:"), all);
+        assertTrue(all.contains("errors.inc:1:"), all);
+        assertTrue(all.contains("multiple-errors.asm:3:1: error:"), all);
+        assertArrayEquals(new byte[] {42}, Files.readAllBytes(output));
+    }
+
+    @Test void collectingErrorsChecksMultipleEncodingsAndKeepsSuccessfulOutputIdentical() throws Exception {
+        Path main = directory.resolve("encoding.asm");
+        Files.writeString(main, " ORG $1200\n JR $1500\n JR $1500\n");
+        var result = service.assemble(new AssemblyRequest(main), SourceProvider.fileSystem(),
+                Assembler.OutputType.BIN, 0, AssemblyService.ErrorMode.COLLECT_ALL);
+        assertFalse(result.succeeded());
+        assertEquals(2, result.diagnostics().size(), result.diagnostics().toString());
+        assertEquals(0, result.objectCode().length);
+        assertTrue(result.emissions().isEmpty());
+
+        Path output = directory.resolve("encoding.bin");
+        Path symbols = directory.resolve("encoding.sym");
+        Files.writeString(main, " ORG $1200\nSTART: NOP\n ORG $1204\n RET\n");
+        runCli(0, "--all-errors", "-F", "255", main.toString(), output.toString(), symbols.toString());
+        assertArrayEquals(new byte[] {0, -1, -1, -1, (byte) 0xC9}, Files.readAllBytes(output));
+        assertTrue(Files.readString(symbols).contains("START"));
+    }
+
     private String runCli(int expectedExit, String... arguments) throws Exception {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         String classes = Path.of(Assembler.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();

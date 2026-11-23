@@ -35,6 +35,10 @@ which will hold a list of symbols and their addresses in the output.
 
 Options:
 
+  * `--all-errors` Report independent errors that can be checked after recovery.
+    By default, the command line stops at the first error. Failed builds in
+    this mode exit with status 1 and leave output files untouched.
+
   * `-I include_path` Include path for additional source files.
     
   * `-L list_file` File to output a listing of the assembled code to.
@@ -55,7 +59,7 @@ Java library API
 ----------------
 
 MZGlass can also be used in-process through `org.tbc.glass.api`. The Maven
-coordinates for the development version are `org.tbc:MZGlass:1.4-SNAPSHOT`;
+coordinates for the development version are `org.tbc:MZGlass:1.4.1-SNAPSHOT`;
 install it locally with `mvn install`. The Java module name is `org.tbc.glass`.
 The executable JAR and the existing command-line options remain available.
 

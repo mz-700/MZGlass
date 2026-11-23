@@ -9,10 +9,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
+import java.util.Set;
+import java.util.function.Consumer;
 
 import org.tbc.glass.SourceFile.SourceFileSpan;
+import org.tbc.glass.api.AssemblyRequest;
+import org.tbc.glass.api.Diagnostic;
+import org.tbc.glass.api.SourceRange;
 
 public class Assembler {
 
@@ -40,6 +47,7 @@ public class Assembler {
                              );
 			System.out.println();
 			System.out.println("Usage: java -jar glass.jar [OPTION] SOURCE [OBJECT] [SYMBOL]");
+			System.out.println("  --all-errors  Report multiple independent assembly errors.");
 			System.exit(1);
 		}
 
@@ -50,6 +58,7 @@ public class Assembler {
 		Path debugPath = null;
 		OutputType outputType = OutputType.BIN;
 		int originFill = 0;
+		boolean allErrors = false;
 		List<Path> includePaths = new ArrayList<>();
 		for (int i = 0; i < args.length; i++) {
 			if (args[i].equals("-I")) {
@@ -68,6 +77,8 @@ public class Assembler {
 				if (++i >= args.length)
 					throw new AssemblyException("Missing argument value.");
 				originFill = parseOriginFill(args[i]);
+			} else if (args[i].equals("--all-errors")) {
+				allErrors = true;
 			} else if (args[i].equals("-O")) {
 				if (++i >= args.length)
 					throw new AssemblyException("Missing argument value.");
@@ -83,10 +94,24 @@ public class Assembler {
 			}
 		}
 
-		Assembler instance = new Assembler(sourcePath, includePaths, originFill);
+		if (sourcePath == null)
+			throw new AssemblyException("Missing source file.");
 		if (outputType == OutputType.MZF)
 			objectPath = withMzfExtension(objectPath);
-		instance.writeObject( objectPath, outputType );
+		Assembler instance;
+		if (allErrors) {
+			var assembled = assembleCollecting(new AssemblyRequest(sourcePath, includePaths, Map.of()),
+					SourceProvider.fileSystem(), originFill, null, error -> System.err.println(formatError(error)));
+			if (assembled == null) {
+				System.exit(1);
+				return;
+			}
+			instance = new Assembler(assembled.source(), originFill);
+			writeObjectBytes(objectPath, encodeObject(assembled.source(), assembled.object().bytes(), outputType));
+		} else {
+			instance = new Assembler(sourcePath, includePaths, originFill);
+			instance.writeObject(objectPath, outputType);
+		}
 		if (debugPath != null)
 			instance.writeDebug( debugPath );
 		if (symbolPath != null)
@@ -113,7 +138,48 @@ public class Assembler {
 		if (originFill < 0 || originFill > 255)
 			throw new IllegalArgumentException("ORG fill must be a byte (0..255).");
 		this.originFill = originFill;
-		source = new SourceBuilder(includePaths).parse(sourcePath);
+		this.source = new SourceBuilder(includePaths).parse(sourcePath);
+	}
+
+	private Assembler(Source source, int originFill) {
+		this.originFill = originFill;
+		this.source = source;
+	}
+
+	public record AssembledSource(Source source, Source.ObjectCode object) {}
+
+	/** Shared CLI and API recovery. Returns null if any assembly error was reported. */
+	public static AssembledSource assembleCollecting(AssemblyRequest request, SourceProvider fallback, int originFill,
+			Consumer<Diagnostic> warnings, Consumer<AssemblyException> report) {
+		record ErrorLocation(SourceRange range, String message) {}
+		Set<ErrorLocation> seen = new HashSet<>();
+		Consumer<AssemblyException> reportOnce = error -> {
+			var diagnostic = Diagnostic.fromException(error, request.sourcePath());
+			if (seen.add(new ErrorLocation(diagnostic.range(), diagnostic.message())))
+				report.accept(error);
+		};
+		var inputs = SourceProvider.overlay(request.sourceOverrides(), fallback);
+		var builder = SourceBuilder.forDiagnostics(request.includePaths(), inputs, warnings,
+				request.ignoreMzfDirectives(), reportOnce);
+		Source source = null;
+		boolean registeredCleanly = false;
+		try {
+			source = builder.parse(request.sourcePath());
+			source.register();
+			registeredCleanly = seen.isEmpty();
+			if (registeredCleanly) {
+				source.expand();
+				source.resolve();
+			}
+		} catch (AssemblyException error) {
+			reportOnce.accept(error);
+		}
+		if (!seen.isEmpty()) {
+			builder.validateRecoveredOperands(registeredCleanly);
+			return null;
+		}
+		var object = source.getObjectCode(originFill, reportOnce);
+		return seen.isEmpty() ? new AssembledSource(source, object) : null;
 	}
 
 	private static int parseOriginFill(String text) {
@@ -139,6 +205,15 @@ public class Assembler {
 			output.write(object, 0, object.length);
 		} catch (IOException e) {
 			throw new RuntimeException(e);
+		}
+	}
+
+	private static void writeObjectBytes(Path objectPath, byte[] bytes) {
+		if (objectPath == null) return;
+		try (OutputStream output = createBufferedOutputStream(objectPath)) {
+			output.write(bytes);
+		} catch (IOException error) {
+			throw new RuntimeException(error);
 		}
 	}
 

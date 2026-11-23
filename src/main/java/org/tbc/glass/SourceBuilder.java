@@ -176,6 +176,10 @@ public class SourceBuilder {
 
 	/** Check independent built-in operand forms on a recovered tree, without resolving addresses or emitting bytes. */
 	public void validateRecoveredOperands() {
+		validateRecoveredOperands(false);
+	}
+
+	void validateRecoveredOperands(boolean checkMnemonics) {
 		if (recovery == null)
 			throw new IllegalStateException("Operand recovery requires a diagnostics source builder.");
 		Scope builtins = source.getScope().getParent();
@@ -183,12 +187,17 @@ public class SourceBuilder {
 			Line line = check.line();
 			String mnemonic = line.getMnemonic();
 			try {
-				if (!builtins.hasLocalSymbol(mnemonic) || line.getScope().getSymbol(mnemonic) != builtins.getLocalSymbol(mnemonic))
-					continue;
-				line.getInstruction().createObject(line.getScope(), line.getArguments());
+				// A missing mnemonic is reliable only after parsing and registration succeeded.
+				if (checkMnemonics)
+					line.getInstruction();
+				if (builtins.hasLocalSymbol(mnemonic) && line.getScope().getSymbol(mnemonic) == builtins.getLocalSymbol(mnemonic))
+					line.getInstruction().createObject(line.getScope(), line.getArguments());
 			} catch (ArgumentException error) {
 				error.addContext(line.getSourceSpan());
 				check.report().accept(error);
+			} catch (Scope.SymbolNotFoundException error) {
+				if (checkMnemonics && !error.getContexts().isEmpty())
+					check.report().accept(error);
 			} catch (AssemblyException dependentError) {
 				// Evaluation may depend on a skipped statement or an address that has yet to be assigned.
 			}
