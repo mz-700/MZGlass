@@ -1,6 +1,7 @@
 package org.tbc.glass;
 
 import java.io.PrintStream;
+import java.util.Map;
 
 import org.tbc.glass.SourceFile.SourceFileSpan;
 import org.tbc.glass.instructions.Ds;
@@ -10,10 +11,16 @@ import org.tbc.glass.instructions.Section;
 public class ListingWriter {
 
 	private final PrintStream output;
+	private final Map<Line, byte[]> consoleReplacements;
 	private SourceFile sourceFile;
 
 	public ListingWriter(PrintStream output) {
+		this(output, Map.of());
+	}
+
+	ListingWriter(PrintStream output, Map<Line, byte[]> consoleReplacements) {
 		this.output = output;
+		this.consoleReplacements = consoleReplacements;
 		this.sourceFile = null;
 	}
 
@@ -60,7 +67,8 @@ public class ListingWriter {
 			return;
 		}
 
-		byte[] bytes = line.getBytes();
+		byte[] bytes = consoleReplacements.get(line);
+		if (bytes == null) bytes = line.getBytes();
 		for (byte b : bytes)
 			output.format("%02X\t", b);
 		for (int i = bytes.length; i < 4; i++)

@@ -254,6 +254,20 @@ class OriginLayoutTest extends TestBase {
         assertTrue(Files.readString(symbols).contains("START"));
     }
 
+    @Test void cliConsoleFlagUpdatesOutputAndListingWithEitherErrorMode() throws Exception {
+        Path main = directory.resolve("console.asm"), output = directory.resolve("console.bin");
+        Path listing = directory.resolve("console.lst");
+        Files.writeString(main, " ORG $1200\n C_RIN A\n C_SOUT\n DB \"A\",$0D,$AA\n RET\n");
+        for (boolean allErrors : List.of(false, true)) {
+            var arguments = new java.util.ArrayList<>(List.of("--ignore-console-instructions",
+                    "-L", listing.toString(), main.toString(), output.toString()));
+            if (allErrors) arguments.addFirst("--all-errors");
+            runCli(0, arguments.toArray(String[]::new));
+            assertArrayEquals(b(0, 0, 0, 0, 0, 0, 0, 0xaa, 0xc9), Files.readAllBytes(output));
+            assertTrue(Files.readString(listing).contains("1205\t00\t00\tAA\t"));
+        }
+    }
+
     private String runCli(int expectedExit, String... arguments) throws Exception {
         String java = Path.of(System.getProperty("java.home"), "bin", "java").toString();
         String classes = Path.of(Assembler.class.getProtectionDomain().getCodeSource().getLocation().toURI()).toString();

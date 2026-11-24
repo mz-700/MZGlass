@@ -39,6 +39,11 @@ Options:
     By default, the command line stops at the first error. Failed builds in
     this mode exit with status 1 and leave output files untouched.
 
+  * `--ignore-console-instructions` Replace the six emulator Console instructions
+    with the same number of NOP bytes. For `C_SOUT`, the assembler also replaces
+    its inline data through the first `$0D` byte. The terminator must appear before
+    the next instruction or output gap.
+
   * `-I include_path` Include path for additional source files.
     
   * `-L list_file` File to output a listing of the assembled code to.

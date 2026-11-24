@@ -4,8 +4,10 @@ import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 
 import org.tbc.glass.AssemblyException;
+import org.tbc.glass.Line;
 import org.tbc.glass.Scope;
 import org.tbc.glass.Source;
 import org.tbc.glass.expressions.Expression;
@@ -101,7 +103,14 @@ public class Ds extends InstructionFactory implements SectionContext {
 
 		/** Keeps nested section/PHASE/ORG mappings, and distinguishes explicit DS fill from origin padding. */
 		public Source.ObjectCode getObjectCode(int originFill, SourceRange location) {
-			var nested=Source.getSectionObjectCode(sections.stream().map(Section::getSource).toList(),context.getAddress(),originFill);
+			return getObjectCode(originFill, location, false, null);
+		}
+
+		public Source.ObjectCode getObjectCode(int originFill, SourceRange location, boolean ignoreConsoleInstructions,
+				Map<Line, byte[]> consoleReplacements) {
+			var nested = Source.getSectionObjectCode(sections.stream().map(Section::getSource).toList(),
+					context.getAddress(), originFill, !virtual && ignoreConsoleInstructions,
+					virtual ? null : consoleReplacements);
 			byte[] section=nested.bytes(); int length=size.getInteger();
 			if(section.length>length) throw new AssemblyException("Section size exceeds space (required: " + section.length + " bytes, available: " + length + " bytes).");
 			if(virtual) return new Source.ObjectCode(new byte[0],List.of());

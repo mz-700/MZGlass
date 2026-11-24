@@ -16,6 +16,12 @@ public class GlobalScope extends Scope {
 		addBuiltInSymbol("add", new Instruction(new Add(), new Scope(this)));
 		addBuiltInSymbol("and", new Instruction(new And(), new Scope(this)));
 		addBuiltInSymbol("bit", new Instruction(new Bit(), new Scope(this)));
+		addBuiltInSymbol("c_min", new Instruction(new ConsoleMemoryInput(), new Scope(this)));
+		addBuiltInSymbol("c_mout", new Instruction(new ConsoleMemoryOutput(), new Scope(this)));
+		addBuiltInSymbol("c_rin", new Instruction(new ConsoleRegisterInput(), new Scope(this)));
+		addBuiltInSymbol("c_rout", new Instruction(new ConsoleRegisterOutput(), new Scope(this)));
+		addBuiltInSymbol("c_sin", new Instruction(new ConsoleStringInput(), new Scope(this)));
+		addBuiltInSymbol("c_sout", new Instruction(new ConsoleStringOutput(), new Scope(this)));
 		addBuiltInSymbol("call", new Instruction(new Call(), new Scope(this)));
 		addBuiltInSymbol("ccf", new Instruction(new Ccf(), new Scope(this)));
 		addBuiltInSymbol("cp", new Instruction(new Cp(), new Scope(this)));

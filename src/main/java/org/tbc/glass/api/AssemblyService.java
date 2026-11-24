@@ -85,7 +85,7 @@ public final class AssemblyService {
             }
             source.expand();
             source.resolve();
-            var object = source.getObjectCode(originFill);
+            var object = source.getObjectCode(originFill, request.ignoreConsoleInstructions());
             return new AssemblyResult(Assembler.encodeObject(source, object.bytes(), outputType), diagnostics,object.emissions());
         } catch (AssemblyException error) {
             diagnostics.add(Diagnostic.fromException(error, request.sourcePath()));

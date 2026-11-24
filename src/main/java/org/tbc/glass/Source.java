@@ -6,12 +6,24 @@ import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Map;
 import java.util.function.Consumer;
 
 import org.tbc.glass.expressions.Expression;
 import org.tbc.glass.expressions.IntegerLiteral;
 import org.tbc.glass.api.Emission;
-import org.tbc.glass.api.SourceRange;
+import org.tbc.glass.instructions.ConsoleMemoryInput;
+import org.tbc.glass.instructions.ConsoleMemoryOutput;
+import org.tbc.glass.instructions.ConsoleRegisterInput;
+import org.tbc.glass.instructions.ConsoleRegisterOutput;
+import org.tbc.glass.instructions.ConsoleStringInput;
+import org.tbc.glass.instructions.ConsoleStringOutput;
+import org.tbc.glass.instructions.Db;
+import org.tbc.glass.instructions.Dd;
+import org.tbc.glass.instructions.Dw;
+import org.tbc.glass.instructions.Incbin;
+import org.tbc.glass.instructions.MzAsc;
+import org.tbc.glass.instructions.MzDisp;
 
 public class Source {
 
@@ -210,18 +222,34 @@ public class Source {
 		@Override public byte[] bytes() { return bytes.clone(); }
 	}
 	public ObjectCode getObjectCode(int originFill) {
-		return getObjectCode(originFill, null);
+		return getObjectCode(originFill, false);
 	}
-	ObjectCode getObjectCode(int originFill, Consumer<AssemblyException> errors) {
-		ObjectCodeOutput output = new ObjectCodeOutput(startAddress,originFill,false,true);
+
+	public ObjectCode getObjectCode(int originFill, boolean ignoreConsoleInstructions) {
+		return getObjectCode(originFill, ignoreConsoleInstructions, null, null);
+	}
+
+	ObjectCode getObjectCode(int originFill, boolean ignoreConsoleInstructions,
+			Consumer<AssemblyException> errors, Map<Line, byte[]> consoleReplacements) {
+		ObjectCodeOutput output = new ObjectCodeOutput(startAddress, originFill, false, true,
+				ignoreConsoleInstructions, consoleReplacements);
 		output.errors = errors;
 		output.write(this);
-		return new ObjectCode(output.bytes.toByteArray(),output.emissions);
+		output.finishConsoleString();
+		return new ObjectCode(output.bytes.toByteArray(), output.emissions);
 	}
+
 	public static ObjectCode getSectionObjectCode(List<Source> sections, Expression address, int originFill) {
-		ObjectCodeOutput output = new ObjectCodeOutput(address,originFill,true,true);
-		for(Source section:sections) output.write(section);
-		return new ObjectCode(output.bytes.toByteArray(),output.emissions);
+		return getSectionObjectCode(sections, address, originFill, false, null);
+	}
+
+	public static ObjectCode getSectionObjectCode(List<Source> sections, Expression address, int originFill,
+			boolean ignoreConsoleInstructions, Map<Line, byte[]> consoleReplacements) {
+		ObjectCodeOutput output = new ObjectCodeOutput(address, originFill, true, true,
+				ignoreConsoleInstructions, consoleReplacements);
+		for (Source section : sections) output.write(section);
+		output.finishConsoleString();
+		return new ObjectCode(output.bytes.toByteArray(), output.emissions);
 	}
 
 	/** Fixed-address DS sections share a cursor; a section's first ORG is not a new file base. */
@@ -240,6 +268,9 @@ public class Source {
 		private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
 		private final int originFill;
 		private final boolean metadata;
+		private final boolean ignoreConsoleInstructions;
+		private final Map<Line, byte[]> consoleReplacements;
+		private Line consoleString;
 		private final List<Emission> emissions = new ArrayList<>();
 		private Consumer<AssemblyException> errors;
 		private long address;
@@ -247,12 +278,19 @@ public class Source {
 		private int phaseDepth;
 
 		ObjectCodeOutput(Expression address, int originFill, boolean anchored, boolean metadata) {
+			this(address, originFill, anchored, metadata, false, null);
+		}
+
+		ObjectCodeOutput(Expression address, int originFill, boolean anchored, boolean metadata,
+				boolean ignoreConsoleInstructions, Map<Line, byte[]> consoleReplacements) {
 			if (originFill < 0 || originFill > 255)
 				throw new IllegalArgumentException("ORG fill must be a byte (0..255).");
 			this.address = address.getInteger();
 			this.originFill = originFill;
 			this.anchored = anchored;
 			this.metadata = metadata;
+			this.ignoreConsoleInstructions = ignoreConsoleInstructions;
+			this.consoleReplacements = consoleReplacements;
 		}
 
 		void write(Source source) {
@@ -297,12 +335,19 @@ public class Source {
 				byte[] object;
 				if(metadata && line.getInstructionObject() instanceof org.tbc.glass.instructions.Ds.Ds_N_N ds) {
 					try {
-						ObjectCode nested = ds.getObjectCode(originFill,line.getSourceSpan().toRange());
-						object=nested.bytes();
+						int previousReplacements = consoleReplacements == null ? 0 : consoleReplacements.size();
+						ObjectCode nested = ds.getObjectCode(originFill, line.getSourceSpan().toRange(),
+								ignoreConsoleInstructions, consoleReplacements);
+						object = nested.bytes();
+						if (object.length > 0) finishConsoleString();
+						if (consoleReplacements != null && consoleReplacements.size() > previousReplacements)
+							consoleReplacements.put(line, object);
 						for(Emission emission:nested.emissions()) emissions.add(emission.shifted(bytes.size()));
 					} catch(AssemblyException error) { error.addContext(line.getSourceSpan()); throw error; }
 				} else {
 					object = line.getBytes(originFill);
+					if (ignoreConsoleInstructions && object.length > 0)
+						object = replaceConsoleBytes(line, object);
 					if(metadata && object.length>0) emissions.add(new Emission(bytes.size(),object.length,
 							line.getScope().getAddress().getInteger(),Emission.Kind.DATA,line.getSourceSpan().toRange()));
 				}
@@ -310,6 +355,44 @@ public class Source {
 				address += object.length;
 				anchored |= object.length != 0;
 			}
+		}
+
+		private byte[] replaceConsoleBytes(Line line, byte[] object) {
+			var instruction = line.getInstruction();
+			int length = 0;
+			if (consoleString != null) {
+				if (instruction instanceof Db || instruction instanceof Dw || instruction instanceof Dd
+						|| instruction instanceof MzAsc || instruction instanceof MzDisp || instruction instanceof Incbin) {
+					while (length < object.length) {
+						if (object[length++] == 0x0d) {
+							consoleString = null;
+							break;
+						}
+					}
+				} else finishConsoleString();
+			}
+			if (instruction instanceof ConsoleStringOutput) {
+				consoleString = line;
+				length = object.length;
+			} else if (instruction instanceof ConsoleRegisterInput || instruction instanceof ConsoleRegisterOutput
+					|| instruction instanceof ConsoleMemoryInput || instruction instanceof ConsoleMemoryOutput
+					|| instruction instanceof ConsoleStringInput) {
+				length = object.length;
+			}
+			if (length == 0) return object;
+			byte[] nops = length == object.length ? new byte[length] : object.clone();
+			if (length != object.length) Arrays.fill(nops, 0, length, (byte) 0);
+			if (consoleReplacements != null) consoleReplacements.put(line, nops);
+			return nops;
+		}
+
+		void finishConsoleString() {
+			if (consoleString == null) return;
+			var error = new AssemblyException("C_SOUT requires inline data terminated by $0D before the next instruction or output gap.");
+			error.addContext(consoleString.getSourceSpan());
+			consoleString = null;
+			if (errors == null) throw error;
+			errors.accept(error);
 		}
 
 		private void origin(int target,Line line) {
@@ -325,6 +408,7 @@ public class Source {
 						+ ", output end: " + address + ").");
 			if (gap > Integer.MAX_VALUE - bytes.size())
 				throw new AssemblyException("ORG gap exceeds the supported object size.");
+			if (gap > 0) finishConsoleString();
 			byte[] padding = new byte[(int)gap];
 			Arrays.fill(padding, (byte)originFill);
 			if(metadata && padding.length>0) emissions.add(new Emission(bytes.size(),padding.length,address,

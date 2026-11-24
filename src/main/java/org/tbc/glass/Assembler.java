@@ -10,6 +10,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -48,6 +49,7 @@ public class Assembler {
 			System.out.println();
 			System.out.println("Usage: java -jar glass.jar [OPTION] SOURCE [OBJECT] [SYMBOL]");
 			System.out.println("  --all-errors  Report multiple independent assembly errors.");
+			System.out.println("  --ignore-console-instructions  Replace Console instructions and inline text with NOPs.");
 			System.exit(1);
 		}
 
@@ -59,6 +61,7 @@ public class Assembler {
 		OutputType outputType = OutputType.BIN;
 		int originFill = 0;
 		boolean allErrors = false;
+		boolean ignoreConsoleInstructions = false;
 		List<Path> includePaths = new ArrayList<>();
 		for (int i = 0; i < args.length; i++) {
 			if (args[i].equals("-I")) {
@@ -79,6 +82,8 @@ public class Assembler {
 				originFill = parseOriginFill(args[i]);
 			} else if (args[i].equals("--all-errors")) {
 				allErrors = true;
+			} else if (args[i].equals("--ignore-console-instructions")) {
+				ignoreConsoleInstructions = true;
 			} else if (args[i].equals("-O")) {
 				if (++i >= args.length)
 					throw new AssemblyException("Missing argument value.");
@@ -99,9 +104,11 @@ public class Assembler {
 		if (outputType == OutputType.MZF)
 			objectPath = withMzfExtension(objectPath);
 		Assembler instance;
+		Map<Line, byte[]> consoleReplacements = listPath != null && ignoreConsoleInstructions ? new IdentityHashMap<>() : null;
 		if (allErrors) {
-			var assembled = assembleCollecting(new AssemblyRequest(sourcePath, includePaths, Map.of()),
-					SourceProvider.fileSystem(), originFill, null, error -> System.err.println(formatError(error)));
+			var request = new AssemblyRequest(sourcePath, includePaths, Map.of(), false, ignoreConsoleInstructions);
+			var assembled = assembleCollecting(request, SourceProvider.fileSystem(), originFill, null,
+					error -> System.err.println(formatError(error)), consoleReplacements);
 			if (assembled == null) {
 				System.exit(1);
 				return;
@@ -110,14 +117,21 @@ public class Assembler {
 			writeObjectBytes(objectPath, encodeObject(assembled.source(), assembled.object().bytes(), outputType));
 		} else {
 			instance = new Assembler(sourcePath, includePaths, originFill);
-			instance.writeObject(objectPath, outputType);
+			if (ignoreConsoleInstructions) {
+				Source source = instance.source;
+				source.register();
+				source.expand();
+				source.resolve();
+				var object = source.getObjectCode(originFill, true, null, consoleReplacements);
+				writeObjectBytes(objectPath, encodeObject(source, object.bytes(), outputType));
+			} else instance.writeObject(objectPath, outputType);
 		}
 		if (debugPath != null)
 			instance.writeDebug( debugPath );
 		if (symbolPath != null)
 			instance.writeSymbols( symbolPath );
 		if (listPath != null)
-			instance.writeList( listPath );
+			instance.writeList(listPath, consoleReplacements == null ? Map.of() : consoleReplacements);
 	}
 
 	private static String formatError(AssemblyException e) {
@@ -151,6 +165,11 @@ public class Assembler {
 	/** Shared CLI and API recovery. Returns null if any assembly error was reported. */
 	public static AssembledSource assembleCollecting(AssemblyRequest request, SourceProvider fallback, int originFill,
 			Consumer<Diagnostic> warnings, Consumer<AssemblyException> report) {
+		return assembleCollecting(request, fallback, originFill, warnings, report, null);
+	}
+
+	private static AssembledSource assembleCollecting(AssemblyRequest request, SourceProvider fallback, int originFill,
+			Consumer<Diagnostic> warnings, Consumer<AssemblyException> report, Map<Line, byte[]> consoleReplacements) {
 		record ErrorLocation(SourceRange range, String message) {}
 		Set<ErrorLocation> seen = new HashSet<>();
 		Consumer<AssemblyException> reportOnce = error -> {
@@ -178,7 +197,7 @@ public class Assembler {
 			builder.validateRecoveredOperands(registeredCleanly);
 			return null;
 		}
-		var object = source.getObjectCode(originFill, reportOnce);
+		var object = source.getObjectCode(originFill, request.ignoreConsoleInstructions(), reportOnce, consoleReplacements);
 		return seen.isEmpty() ? new AssembledSource(source, object) : null;
 	}
 
@@ -285,8 +304,12 @@ public class Assembler {
 	}
 
 	public void writeList(Path listPath) {
+		writeList(listPath, Map.of());
+	}
+
+	private void writeList(Path listPath, Map<Line, byte[]> consoleReplacements) {
 		try (PrintStream output = new PrintStream(createBufferedOutputStream(listPath))) {
-			new ListingWriter(output).write(source);
+			new ListingWriter(output, consoleReplacements).write(source);
 		} catch (IOException e) {
 			throw new RuntimeException(e);
 		}
